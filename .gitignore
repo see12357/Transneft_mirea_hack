@@ -1,5 +1,5 @@
 # created by virtualenv automatically
-.venv/Lib
+../.venv/Lib
 # Игнорируем виртуальное окружение Python
 .venv/
 venv/
@@ -16,7 +16,7 @@ __pycache__/
 # Игнорируем сгенерированный индекс FAISS
 # Он создается автоматически из .docx файла, его не нужно хранить в репозитории
 /data/faiss_index_gemma/
-/data/
+backend/data/
 # Игнорируем файлы IDE (для PyCharm, VSCode и т.д.)
 .idea/
 .vscode/
@@ -27,3 +27,49 @@ __pycache__/
 # Логи и временные файлы
 *.log
 *.tmp
+
+# Общие файлы для игнорирования
+.idea/
+.vscode/
+*.log
+*.tmp
+.DS_Store
+
+# --- Backend (Python) ---
+
+# Виртуальное окружение
+backend/.venv/
+backend/venv/
+backend/env/
+
+# Кэш Python
+**/__pycache__/
+*.pyc
+
+# Папки с тяжелыми моделями
+backend/models/
+
+# Сгенерированный индекс FAISS
+backend/data/faiss_index_gemma/
+
+# Локальные переменные окружения
+backend/.env
+
+
+# --- Frontend (React / Node.js) ---
+
+# Папка с зависимостями
+frontend/node_modules/
+
+# Сборка проекта для продакшена
+frontend/build/
+
+# Логи ошибок
+frontend/npm-debug.log*
+frontend/yarn-error.log
+frontend/yarn.lock
+
+# Локальные переменные окружения
+frontend/.env.local
+frontend/.env.*.local
+frontend/.env
