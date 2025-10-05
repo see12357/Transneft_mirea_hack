@@ -1,0 +1,42 @@
+version: '3.8'
+
+services:
+  # Сервис Redis
+  redis:
+    image: redis:alpine
+    ports:
+      # Пробрасываем порт для отладки, если нужно подключиться к Redis напрямую
+      - "6379:6379"
+
+  # Сервис бэкенда
+  backend:
+    build: ./backend
+    # Переменные окружения для подключения к Redis внутри Docker-сети
+    environment:
+      - REDIS_HOST=redis
+    depends_on:
+      - redis
+    # === ВАЖНО: ДЛЯ ПОДКЛЮЧЕНИЯ К OLLAMA НА ВАШЕМ КОМПЬЮТЕРЕ ===
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  # Сервис фронтенда (скрыт за Nginx)
+  frontend:
+    build: ./frontend
+
+  # Сервис Nginx (единая точка входа)
+  nginx:
+    image: nginx:stable-alpine
+    ports:
+      # Пробрасываем порт 80 контейнера на порт 80 вашего компьютера
+      - "80:80"
+    volumes:
+      # Подключаем наш файл конфигурации Nginx
+      - ./nginx.conf:/etc/nginx/conf.d/default.conf
+      # Подключаем собранный фронтенд
+      - type: bind
+        source: ./frontend/dist
+        target: /usr/share/nginx/html
+    depends_on:
+      - backend
+      - frontend
