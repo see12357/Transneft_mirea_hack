@@ -4,7 +4,17 @@ FROM python:3.10-slim
 # Устанавливаем рабочую директорию внутри контейнера
 WORKDIR /app
 
+# Объявляем, что мы будем принимать 'аргумент сборки' с этим именем
+ARG HF_TOKEN
+
+# Устанавливаем утилиту для входа в систему
+RUN pip install huggingface_hub
+
+# Используем токен для авторизации внутри контейнера
+RUN huggingface-cli login --token $HF_TOKEN
+
 # Копируем файл с зависимостями и устанавливаем их
+# Теперь эта команда будет выполняться с правами доступа
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
