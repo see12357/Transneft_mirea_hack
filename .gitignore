@@ -15,8 +15,6 @@ __pycache__/
 
 # Игнорируем сгенерированный индекс FAISS
 # Он создается автоматически из .docx файла, его не нужно хранить в репозитории
-/data/faiss_index_gemma/
-backend/data/
 # Игнорируем файлы IDE (для PyCharm, VSCode и т.д.)
 .idea/
 .vscode/
