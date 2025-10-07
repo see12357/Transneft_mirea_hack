@@ -1,15 +1,66 @@
 import ChatInterface from './components/ChatInterface';
-import './app.css'; // Импортируем app.css
+import './app.css';
+import { CssBaseline, ThemeProvider, createTheme, Box, useMediaQuery } from '@mui/material';
+import { blue, red } from '@mui/material/colors';
+import React from 'react';
+
+function useAppTheme() {
+  const prefersDark = useMediaQuery('(prefers-color-scheme: dark)');
+  const [mode, setMode] = React.useState(prefersDark ? 'dark' : 'light');
+
+  const toggleColorMode = React.useCallback(() => {
+    setMode(prev => (prev === 'light' ? 'dark' : 'light'));
+  }, []);
+
+  const theme = React.useMemo(() => createTheme({
+    palette: {
+      mode,
+      primary: {
+        main: blue[600]
+      },
+      secondary: {
+        main: red[600]
+      }
+    },
+    typography: {
+      fontFamily: '"Inter", "Segoe UI", "Roboto", "Helvetica Neue", Arial, sans-serif',
+      h6: {
+        fontWeight: 600,
+        letterSpacing: '-0.01em'
+      },
+      body1: {
+        fontWeight: 400,
+        lineHeight: 1.6
+      },
+      body2: {
+        fontWeight: 400,
+        lineHeight: 1.5
+      }
+    },
+    shape: { borderRadius: 16 },
+    components: {
+      MuiPaper: {
+        styleOverrides: {
+          root: {
+            backgroundImage: 'none'
+          }
+        }
+      }
+    }
+  }), [mode]);
+
+  return { theme, mode, toggleColorMode };
+}
 
 function App() {
+  const { theme, mode, toggleColorMode } = useAppTheme();
   return (
-    <main className="bg-gray-100 w-full min-h-screen flex items-center justify-center font-sans">
-      <div className="w-full max-w-4xl h-[90vh] max-h-[800px] flex rounded-lg shadow-2xl overflow-hidden">
-        <div className="w-full bg-white flex flex-col">
-          <ChatInterface />
-        </div>
-      </div>
-    </main>
+    <ThemeProvider theme={theme}>
+      <CssBaseline />
+      <Box sx={{ bgcolor: 'background.default', minHeight: '100vh' }}>
+        <ChatInterface mode={mode} toggleColorMode={toggleColorMode} />
+      </Box>
+    </ThemeProvider>
   );
 }
 

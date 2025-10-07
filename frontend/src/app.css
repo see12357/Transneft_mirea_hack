@@ -1,0 +1,47 @@
+/* App-level overrides for chat layout spacing */
+html, body, #root {
+  height: 100%;
+  width: 100vw;
+  min-height: 100vh;
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+  overflow-x: hidden;
+  scroll-behavior: smooth;
+  font-family: 'Montserrat', 'Poppins', 'Inter', Arial, sans-serif;
+}
+
+body {
+  font-size: 1rem;
+  background: var(--background, #f7f7f7);
+}
+
+#root {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Smooth scrolling for the messages container */
+#messages-scroll {
+  scroll-behavior: smooth;
+  min-height: 0;
+  max-height: 100vh;
+  overflow-y: auto;
+}
+
+/* Ensure the badger image and chat are the same height */
+.badger-sidebar-img {
+  max-height: 70vh;
+  width: auto;
+  object-fit: contain;
+  display: block;
+}
+
+/* Responsive chat container */
+@media (max-width: 900px) {
+  .badger-sidebar-img {
+    max-height: 30vh;
+  }
+}
+
