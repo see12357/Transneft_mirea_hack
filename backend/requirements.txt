@@ -12,7 +12,7 @@ langchain-community
 langchain-ollama
 
 # --- Векторный поиск ---
-faiss-gpu # Используйте faiss-gpu, если у вас настроен GPU
+faiss-cpu # Используйте faiss-gpu, если у вас настроен GPU
 sentence-transformers
 
 # --- Утилиты для обработки данных ---

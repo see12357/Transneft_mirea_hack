@@ -1,13 +1,10 @@
-version: '3.8'
+# version: '3.8' # Эта строка устарела и может быть удалена
 
 services:
   # Сервис Redis для хранения истории чатов
   redis:
     image: redis:alpine
     container_name: transneft-redis
-    ports:
-      # Пробрасываем порт для отладки, если нужно подключиться к Redis напрямую
-      - "6379:6379"
 
   # Сервис Бэкенда (Python, FastAPI, LangChain)
   backend:
@@ -25,27 +22,15 @@ services:
     # Пробрасываем доступ к Ollama, работающему на хост-машине (вашем ноутбуке)
     extra_hosts:
       - "host.docker.internal:host-gateway"
-    # Для отладки можно раскомментировать порты, чтобы обращаться к API напрямую
-    # ports:
-    #   - "8000:8000"
 
-  # Сервис Фронтенда (React, Vite) - только для сборки
+  # Сервис Фронтенда, который включает в себя сборку React и запуск Nginx
   frontend:
-    build:
-      context: ./frontend
-    container_name: transneft-frontend-builder
-    # Этот контейнер только собирает статику и не запускается
-
-  # Сервис Nginx (Веб-сервер и обратный прокси)
-  nginx:
-    image: nginx:stable-alpine
-    container_name: transneft-nginx
+    build: ./frontend
+    container_name: transneft-frontend-nginx
     ports:
-      # Вся система будет доступна снаружи по порту 80
+      # Пробрасываем порт 80 контейнера на порт 80 вашего компьютера.
+      # Ваше приложение будет доступно по http://localhost
       - "80:80"
-    volumes:
-      # Подключаем нашу кастомную конфигурацию Nginx
-      - ./nginx.conf:/etc/nginx/conf.d/default.conf
     depends_on:
-      # Nginx запустится только после успешного старта бэкенда
+      # Фронтенд запустится только после успешного старта бэкенда
       - backend
