@@ -2,7 +2,7 @@
 from langchain_community.embeddings import HuggingFaceEmbeddings
 import os
 
-MODEL_NAME = "google/embeddinggemma-300m"
+MODEL_NAME = "intfloat/multilingual-e5-large-instruct"
 CACHE_DIR = "models_cache" # Папка, куда будут скачаны модели
 
 if not os.path.exists(CACHE_DIR):

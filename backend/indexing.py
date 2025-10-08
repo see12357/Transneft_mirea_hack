@@ -22,8 +22,8 @@ except Exception as e:
 # 2. Разделение текста на чанки
 print("Разделение текста на чанки...")
 text_splitter = RecursiveCharacterTextSplitter(
-    chunk_size=1200,
-    chunk_overlap=200,
+    chunk_size=512,
+    chunk_overlap=100,
     length_function=len,
 )
 chunks = text_splitter.split_text(full_text)
@@ -31,18 +31,18 @@ print(f"Документ разделен на {len(chunks)} чанков.")
 
 # 3. Инициализация модели эмбеддингов через адаптер LangChain
 print("Загрузка модели эмбеддингов 'google/embeddinggemma-300m' через LangChain...")
-# Мы просто указываем имя модели, а LangChain сам правильно ее загрузит и обернет
+
 model_name = "google/embeddinggemma-300m"
-model_kwargs = {'device': 'cpu'} # Указываем, что нужно использовать CPU
+model_kwargs = {'device': 'cpu'}
 embedding_model = HuggingFaceEmbeddings(
     model_name=model_name,
     model_kwargs=model_kwargs
-) # <-- ИЗМЕНЕНИЕ 2
+)
 print("Модель эмбеддингов загружена.")
 
 # 4. Создание и сохранение FAISS индекса
 print("Создание векторного индекса FAISS...")
-# Эта строка теперь будет работать, так как у embedding_model есть нужный метод
+
 vector_store = FAISS.from_texts(chunks, embedding_model)
 vector_store.save_local(FAISS_INDEX_PATH)
 print(f"Индекс FAISS успешно создан и сохранен в папке '{FAISS_INDEX_PATH}'.")
