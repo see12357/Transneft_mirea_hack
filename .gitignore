@@ -53,7 +53,7 @@ backend/models/
 # Локальные переменные окружения
 backend/.env
 
-
+backend/models_cache
 # --- Frontend (React / Node.js) ---
 
 # Папка с зависимостями
