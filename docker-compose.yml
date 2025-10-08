@@ -4,16 +4,13 @@ services:
     container_name: transneft-redis
     restart: unless-stopped
 
-  # --- НОВЫЙ СЕРВИС OLLAMA ---
   ollama:
+    # Просто используем официальный образ. Он сам запустит сервер.
     image: ollama/ollama
     container_name: transneft-ollama
-    # Создаем именованный том, чтобы Ollama сохраняла скачанные модели между перезапусками
     volumes:
       - ollama_data:/root/.ollama
     restart: unless-stopped
-    # Важно: Не пробрасываем порт 11434 наружу,
-    # так как бэкенд будет общаться с ним по внутренней сети Docker.
 
   backend:
     build:
@@ -23,14 +20,12 @@ services:
     container_name: transneft-backend
     environment:
       - REDIS_HOST=redis
-    # --- ИЗМЕНЕНИЕ: Указываем зависимость от Ollama ---
     depends_on:
+      # Просто ждем, пока контейнеры redis и ollama запустятся.
+      # Проверку наличия модели мы сделаем в коде бэкенда.
       - redis
-      - ollama # Теперь бэкенд будет ждать, пока запустится Ollama
+      - ollama
     restart: unless-stopped
-    # Убираем extra_hosts, он больше не нужен
-    # extra_hosts:
-    #   - "host.docker.internal:host-gateway"
 
   frontend:
     build: ./frontend
@@ -41,6 +36,5 @@ services:
       - backend
     restart: unless-stopped
 
-# --- НОВЫЙ РАЗДЕЛ: Объявляем именованный том ---
 volumes:
   ollama_data:

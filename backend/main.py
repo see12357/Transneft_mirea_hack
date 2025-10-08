@@ -1,6 +1,8 @@
 import os
 import redis
 import json
+import requests
+import time
 from fastapi import FastAPI, HTTPException, Request
 from pydantic import BaseModel
 from contextlib import asynccontextmanager
@@ -18,16 +20,56 @@ FAISS_INDEX_PATH = "data/faiss_index_gemma"
 OLLAMA_MODEL_NAME = "gemma3:4b-it-qat"
 EMBEDDING_MODEL_NAME = "google/embeddinggemma-300m"
 MODEL_CACHE_PATH = "/root/.cache/huggingface"
+OLLAMA_BASE_URL = "http://ollama:11434"
 
 # --- КЛИЕНТ REDIS ---
 redis_client = redis.Redis(host=REDIS_HOST, port=6379, db=0, decode_responses=True)
 
 
-# --- LIFESPAN MANAGER ---
+def ensure_ollama_model(model_name: str, base_url: str):
+    """Проверяет наличие модели в Ollama и запускает ее скачивание, если необходимо."""
+    print(f"Проверка наличия модели '{model_name}' в Ollama...")
+    try:
+        # Отправляем запрос на скачивание. stream=False означает, что запрос будет ждать
+        # завершения скачивания и вернет итоговый статус.
+        response = requests.post(f"{base_url}/api/pull", json={"name": model_name, "stream": False}, timeout=3600) # Таймаут 1 час
+        response.raise_for_status()
+
+        # Иногда Ollama возвращает 200, но с ошибкой в теле ответа
+        if "error" in response.json():
+            raise Exception(response.json()['error'])
+
+        print(f"Модель '{model_name}' успешно загружена или уже была доступна.")
+        return True
+    except requests.exceptions.RequestException as e:
+        print(f"Сетевая ошибка при попытке связаться с Ollama: {e}")
+        return False
+    except Exception as e:
+        print(f"❌ Не удалось скачать модель '{model_name}': {e}")
+        return False
+
+
+# --- LIFESPAN MANAGER ДЛЯ ЗАГРУЗКИ МОДЕЛЕЙ ---
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    print("Сервер запускается... Загрузка моделей...")
+    print("Сервер запускается... Подготовка зависимостей...")
 
+    # Шаг 1: Убедимся, что модель Ollama доступна
+    ollama_ready = False
+    max_retries = 20
+    retry_delay = 15  # секунд
+
+    for i in range(max_retries):
+        if ensure_ollama_model(OLLAMA_MODEL_NAME, OLLAMA_BASE_URL):
+            ollama_ready = True
+            break
+        print(f"Попытка {i+1}/{max_retries}. Ollama еще не готова, ждем {retry_delay} секунд...")
+        time.sleep(retry_delay)
+
+    if not ollama_ready:
+        raise RuntimeError("Не удалось подготовить модель в Ollama после нескольких попыток. Сервер не может запуститься.")
+
+    # Шаг 2: Загрузка локальных моделей и данных
     print(f"Загрузка embedding-модели '{EMBEDDING_MODEL_NAME}' из локального кеша...")
     embedding_model = HuggingFaceEmbeddings(
         model_name=EMBEDDING_MODEL_NAME,
@@ -45,22 +87,15 @@ async def lifespan(app: FastAPI):
     retriever = vector_store.as_retriever(search_kwargs={'k': 4})
     print("✅ Векторное хранилище успешно загружено.")
 
+    # Шаг 3: Инициализация RAG-цепочки
     try:
-        print("Подключение к Ollama...")
+        print("Инициализация RAG-цепочки с моделью Ollama...")
         llm = ChatOllama(
             model=OLLAMA_MODEL_NAME,
             temperature=0.1,
-            # <--- ИЗМЕНЕНИЕ: Указываем имя сервиса Ollama
-            base_url="http://ollama:11434"
+            base_url=OLLAMA_BASE_URL
         )
-        llm.invoke("Connection test")
-        print("✅ Успешное подключение к Ollama.")
-    except Exception as e:
-        print(f"❌ ОШИБКА: Не удалось подключиться к Ollama. Убедитесь, что Ollama запущена. Ошибка: {e}")
-        raise RuntimeError("Could not connect to Ollama") from e
-
-    # <--- ИЗМЕНЕНИЕ: НОВЫЙ ДРУЖЕЛЮБНЫЙ ПРОМПТ ---
-    template = """Ты — дружелюбный и компетентный виртуальный помощник компании "Транснефть". Твоя главная цель — помогать пользователям, предоставляя понятные и точные ответы на основе внутренней базы знаний.
+        template = """Ты — дружелюбный и компетентный виртуальный помощник компании "Транснефть". Твоя главная цель — помогать пользователям, предоставляя понятные и точные ответы на основе внутренней базы знаний.
 
 СТИЛЬ ОБЩЕНИЯ:
 - Всегда начинай ответ с вежливого и дружелюбного приветствия (например, "Здравствуйте!", "Добрый день!").
@@ -81,17 +116,14 @@ async def lifespan(app: FastAPI):
 {question}
 
 ТВОЙ ДРУЖЕЛЮБНЫЙ ОТВЕТ:"""
-    prompt = ChatPromptTemplate.from_template(template)
+        prompt = ChatPromptTemplate.from_template(template)
+        def format_docs(docs): return "\n\n".join(doc.page_content for doc in docs)
+        app.state.rag_chain = ({"context": retriever | format_docs, "question": RunnablePassthrough()} | prompt | llm | StrOutputParser())
+        print("✅ RAG-цепочка успешно создана.")
 
-    def format_docs(docs):
-        return "\n\n".join(doc.page_content for doc in docs)
-
-    app.state.rag_chain = (
-            {"context": retriever | format_docs, "question": RunnablePassthrough()}
-            | prompt
-            | llm
-            | StrOutputParser()
-    )
+    except Exception as e:
+        print(f"❌ ОШИБКА при создании RAG-цепочки: {e}")
+        raise RuntimeError("Could not create RAG chain") from e
 
     print("✅ Все модели и RAG-цепочка успешно загружены. Сервер готов к работе.")
     yield
