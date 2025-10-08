@@ -35,7 +35,7 @@ const ChatInterface = ({ mode, toggleColorMode }) => {
   useEffect(() => {
     const fetchHistory = async () => {
       try {
-        const response = await fetch(`http://127.0.0.1:8000/api/chat/history/${sessionId}`);
+        const response = await fetch(`/api/chat/history/${sessionId}`);
         if (response.ok) {
           const data = await response.json();
           setMessages(data);
@@ -59,7 +59,7 @@ const ChatInterface = ({ mode, toggleColorMode }) => {
 
     try {
       // Отправляем запрос с вопросом И session_id
-      const response = await fetch('http://127.0.0.1:8000/api/chat', {
+      const response = await fetch('/api/chat', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({

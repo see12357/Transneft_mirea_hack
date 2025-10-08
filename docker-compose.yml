@@ -1,36 +1,30 @@
-# version: '3.8' # Эта строка устарела и может быть удалена
-
 services:
-  # Сервис Redis для хранения истории чатов
   redis:
     image: redis:alpine
     container_name: transneft-redis
 
-  # Сервис Бэкенда (Python, FastAPI, LangChain)
   backend:
     build:
       context: ./backend
-      # Передаем секретный токен Hugging Face в Dockerfile во время сборки
       args:
         - HF_TOKEN=${HF_TOKEN}
     container_name: transneft-backend
     environment:
-      # Указываем, что Redis доступен по имени сервиса 'redis'
       - REDIS_HOST=redis
+      - OLLAMA_HOST=ollama # (Если вы используете Ollama в Docker)
+    # Порты пробрасывать не нужно, т.к. Nginx будет общаться с ним внутри сети
     depends_on:
       - redis
-    # Пробрасываем доступ к Ollama, работающему на хост-машине (вашем ноутбуке)
+      # - ollama # (Раскомментируйте, если Ollama в Docker)
     extra_hosts:
+      # Оставьте эту строку, если Ollama работает на вашем компьютере, а не в Docker
       - "host.docker.internal:host-gateway"
 
-  # Сервис Фронтенда, который включает в себя сборку React и запуск Nginx
   frontend:
     build: ./frontend
     container_name: transneft-frontend-nginx
     ports:
-      # Пробрасываем порт 80 контейнера на порт 80 вашего компьютера.
       # Ваше приложение будет доступно по http://localhost
       - "80:80"
     depends_on:
-      # Фронтенд запустится только после успешного старта бэкенда
       - backend
