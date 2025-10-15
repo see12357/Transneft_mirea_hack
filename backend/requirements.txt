@@ -19,7 +19,7 @@ sentence-transformers
 python-docx # Для чтения .docx файлов
 pandas # Для работы с CSV в скрипте оценки
 
-
+evaluate
 
 # --- Зависимости для BLEURT и Hugging Face ---
 tensorflow==2.15.0

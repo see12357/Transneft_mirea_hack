@@ -18,16 +18,41 @@ OLLAMA_MODEL_NAME = "gemma3:4b-it-qat"
 OLLAMA_BASE_URL = "http://ollama:11434"
 EMBEDDING_MODEL_NAME = "google/embeddinggemma-300m"
 BGE_MODEL_NAME = "BAAI/bge-m3"
+MODEL_CACHE_PATH = "/root/.cache/huggingface"
 
 # --- 1. ЗАГРУЗКА RAG-СИСТЕМЫ И БЕНЧМАРКА ---
 
 print("Загрузка RAG-системы...")
 start_time = time.time()
 
-embedding_model = HuggingFaceEmbeddings(model_name=EMBEDDING_MODEL_NAME, model_kwargs={'device': 'cpu'})
-vector_store = FAISS.load_local(FAISS_INDEX_PATH, embeddings=embedding_model, allow_dangerous_deserialization=True)
+# Инициализируем компоненты RAG
+embedding_model = HuggingFaceEmbeddings(
+    model_name=EMBEDDING_MODEL_NAME,
+    model_kwargs={'device': 'cpu'},
+    cache_folder=MODEL_CACHE_PATH
+)
+
+# Загружаем ЛОКАЛЬНЫЙ (кэшированный) индекс FAISS, который был скопирован в контейнер
+vector_store = FAISS.load_local(
+    FAISS_INDEX_PATH,
+    embeddings=embedding_model,
+    allow_dangerous_deserialization=True
+)
 retriever = vector_store.as_retriever(search_kwargs={'k': 10})
-llm = ChatOllama(model=OLLAMA_MODEL_NAME, temperature=0.1, base_url=OLLAMA_BASE_URL)
+
+# Подключаемся к LLM в контейнере OLLAMA по его сервисному имени
+try:
+    print(f"Подключение к Ollama по адресу: {OLLAMA_BASE_URL}")
+    llm = ChatOllama(
+        model=OLLAMA_MODEL_NAME,
+        temperature=0.1,
+        base_url=OLLAMA_BASE_URL
+    )
+    llm.invoke("Connection test") # Пробный вызов
+    print("✅ Успешное подключение к Ollama.")
+except Exception as e:
+    print(f"❌ ОШИБКА: Не удалось подключиться к Ollama. Ошибка: {e}")
+    exit() # Если нет LLM, дальше нет смысла
 
 template = """Ты — цифровой ассистент-консультант компании "Транснефть". Твоя задача — давать точные и фактические ответы, основываясь ИСКЛЮЧИТЕЛЬНО на предоставленном ниже контексте. Не используй свои общие знания.
 
