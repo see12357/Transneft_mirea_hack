@@ -24,4 +24,7 @@ evaluate
 # --- Зависимости для BLEURT и Hugging Face ---
 tensorflow==2.15.0
 tf-keras
-huggingface_hub # Для авторизации
+huggingface_hub
+
+nltk
+rouge_score

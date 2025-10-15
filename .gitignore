@@ -55,7 +55,7 @@ backend/.env
 
 backend/models_cache
 # --- Frontend (React / Node.js) ---
-
+backend/backend
 # Папка с зависимостями
 frontend/node_modules/
 

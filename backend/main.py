@@ -17,8 +17,8 @@ from langchain_core.output_parsers import StrOutputParser
 # --- НАСТРОЙКИ ---
 REDIS_HOST = os.getenv("REDIS_HOST", "localhost")
 FAISS_INDEX_PATH = "data/faiss_index_gemma"
-OLLAMA_MODEL_NAME = "gemma3:4b-it-qat"
-EMBEDDING_MODEL_NAME = "google/embeddinggemma-300m"
+OLLAMA_MODEL_NAME = "gemma3:1b-it-qat"
+EMBEDDING_MODEL_NAME = "Qwen/Qwen3-Embedding-0.6B"
 MODEL_CACHE_PATH = "/root/.cache/huggingface"
 OLLAMA_BASE_URL = "http://ollama:11434"
 

@@ -30,9 +30,9 @@ chunks = text_splitter.split_text(full_text)
 print(f"Документ разделен на {len(chunks)} чанков.")
 
 # 3. Инициализация модели эмбеддингов через адаптер LangChain
-print("Загрузка модели эмбеддингов 'google/embeddinggemma-300m' через LangChain...")
+print("Загрузка модели эмбеддингов 'Qwen/Qwen3-Embedding-0.6B' через LangChain...")
 
-model_name = "google/embeddinggemma-300m"
+model_name = "Qwen/Qwen3-Embedding-0.6B"
 model_kwargs = {'device': 'cpu'}
 embedding_model = HuggingFaceEmbeddings(
     model_name=model_name,

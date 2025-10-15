@@ -2,7 +2,7 @@
 from langchain_community.embeddings import HuggingFaceEmbeddings
 import os
 
-MODEL_NAME = "intfloat/multilingual-e5-large-instruct"
+MODEL_NAME = "Qwen/Qwen3-Embedding-0.6B"
 CACHE_DIR = "models_cache" # Папка, куда будут скачаны модели
 
 if not os.path.exists(CACHE_DIR):

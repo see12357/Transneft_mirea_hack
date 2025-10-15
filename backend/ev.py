@@ -14,9 +14,9 @@ from sklearn.metrics.pairwise import cosine_similarity
 # --- НАСТРОЙКИ ---
 BENCHMARK_FILE_PATH = "benchmark.csv"
 FAISS_INDEX_PATH = "data/faiss_index_gemma"
-OLLAMA_MODEL_NAME = "gemma3:4b-it-qat"
+OLLAMA_MODEL_NAME = "gemma3:1b-it-qat"
 OLLAMA_BASE_URL = "http://ollama:11434"
-EMBEDDING_MODEL_NAME = "google/embeddinggemma-300m"
+EMBEDDING_MODEL_NAME = "Qwen/Qwen3-Embedding-0.6B"
 BGE_MODEL_NAME = "BAAI/bge-m3"
 MODEL_CACHE_PATH = "/root/.cache/huggingface"
 
