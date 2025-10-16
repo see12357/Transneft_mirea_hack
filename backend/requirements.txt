@@ -33,5 +33,5 @@ langchain-huggingface
 torch
 torchaudio
 transformers
-penai-whisper
+openai-whisper
 ffmpeg
