@@ -33,3 +33,5 @@ langchain-huggingface
 torch
 torchaudio
 transformers
+pydub
+ffmpeg

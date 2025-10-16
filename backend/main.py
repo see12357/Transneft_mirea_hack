@@ -4,6 +4,8 @@ import re
 import json
 import requests
 import time
+import io
+from pydub import AudioSegment
 from fastapi import FastAPI, HTTPException, UploadFile, File, Form, Request
 from pydantic import BaseModel
 from contextlib import asynccontextmanager
@@ -281,7 +283,6 @@ async def get_answer_audio(
 ):
     print("\n" + "=" * 50)
     print(f"ПОЛУЧЕН АУДИО ЗАПРОС: /api/chat/audio. ID сессии: {session_id}")
-    print(f"Имя файла: {audio_file.filename}, Тип: {audio_file.content_type}")
 
     rag_chain = fastapi_request.app.state.rag_chain
     stt_pipeline = fastapi_request.app.state.stt_pipeline
@@ -293,10 +294,27 @@ async def get_answer_audio(
     if not audio_bytes:
         raise HTTPException(status_code=400, detail="Аудиофайл пуст.")
 
-    # Шаг 2: Распознаем речь с помощью Whisper
+    # --- ИЗМЕНЕНИЕ: Явная конвертация аудио ---
+    print("Конвертация аудио для Whisper...")
+    try:
+        # 1. Загружаем аудио из байтов
+        audio = AudioSegment.from_file(io.BytesIO(audio_bytes))
+
+        # 2. Устанавливаем нужные параметры: 16kHz, моно, 16-bit
+        audio = audio.set_frame_rate(16000).set_channels(1).set_sample_width(2)
+
+        # 3. Получаем "сырые" байты для pipeline
+        raw_audio_bytes = audio.raw_data
+
+    except Exception as e:
+        print(f" ОШИБКА при конвертации аудио: {e}")
+        raise HTTPException(status_code=500, detail="Не удалось сконвертировать аудиофайл.")
+    # ----------------------------------------
+
     print("Распознавание речи с помощью Whisper...")
     try:
-        transcription_result = stt_pipeline(audio_bytes)
+        # Передаем "сырые" байты в pipeline
+        transcription_result = stt_pipeline({"raw": raw_audio_bytes, "sampling_rate": 16000})
         question_text = transcription_result["text"].strip()
         print(f"Текст распознан: '{question_text}'")
         if not question_text:
@@ -305,9 +323,7 @@ async def get_answer_audio(
         print(f" ОШИБКА при распознавании речи: {e}")
         raise HTTPException(status_code=500, detail="Не удалось обработать аудиофайл.")
 
-    # Шаг 3: Используем распознанный текст для вызова основной RAG-логики
     response = await _process_chat_logic(session_id, question_text, rag_chain)
     print("=" * 50 + "\n")
 
-    # Возвращаем и ответ, и то, как был распознан вопрос
     return {"answer": response["answer"], "transcribed_question": response["question_text"]}
