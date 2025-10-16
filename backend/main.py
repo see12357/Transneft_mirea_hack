@@ -3,7 +3,7 @@ import redis
 import json
 import requests
 import time
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, UploadFile, File, Form, Request
 from pydantic import BaseModel
 from contextlib import asynccontextmanager
 from fastapi.middleware.cors import CORSMiddleware
@@ -13,31 +13,42 @@ from langchain_ollama import ChatOllama
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
 from operator import itemgetter
+from langchain.retrievers.document_compressors import CrossEncoderReranker
 
 from langchain.retrievers import ContextualCompressionRetriever
-from langchain_huggingface.cross_encoders import HuggingFaceCrossEncoder
+from langchain_community.cross_encoders import HuggingFaceCrossEncoder
+from langchain.retrievers.document_compressors import CrossEncoderReranker
+# --- ИЗМЕНЕНИЕ: Импортируем pipeline из transformers для Whisper ---
+from transformers import pipeline
 
-# --- НАСТРОЙКИ ---
+# --- НАСТРОЙКИ (ИЗМЕНЕНЫ ПУТИ) ---
 REDIS_HOST = os.getenv("REDIS_HOST", "localhost")
 OLLAMA_HOST = os.getenv("OLLAMA_HOST", "localhost")
+
+# В Dockerfile мы копируем все из ./backend в /app
+# Поэтому путь к индексу внутри контейнера будет /app/data/faiss_index_gemma
 FAISS_INDEX_PATH = "data/faiss_index_gemma"
 OLLAMA_MODEL_NAME = "gemma3:4b-it-qat"
 EMBEDDING_MODEL_NAME = "Qwen/Qwen3-Embedding-0.6B"
 RERANKER_MODEL_NAME = "cross-encoder/ms-marco-MiniLM-L-6-v2"
+WHISPER_MODEL_NAME = "openai/whisper-medium"
+
+# Этот путь должен соответствовать тому, что мы копируем в Dockerfile
+# и монтируем в docker-compose.yml
 MODEL_CACHE_PATH = "/root/.cache/huggingface"
 OLLAMA_BASE_URL = f"http://{OLLAMA_HOST}:11434"
+
 
 # --- КЛИЕНТ REDIS ---
 redis_client = redis.Redis(host=REDIS_HOST, port=6379, db=0, decode_responses=True)
 
 
 def ensure_ollama_model(model_name: str, base_url: str):
-    """Проверяет наличие модели в Ollama и запускает ее скачивание, если необходимо."""
+    # ... (эта функция остается без изменений) ...
     print(f"Проверка наличия модели '{model_name}' в Ollama...")
     try:
         response = requests.post(f"{base_url}/api/pull", json={"name": model_name, "stream": False}, timeout=3600)
         response.raise_for_status()
-        # Иногда Ollama возвращает 200, но с ошибкой в теле ответа, проверяем это
         response_json = response.json()
         if isinstance(response_json, dict) and "error" in response_json:
             raise Exception(response_json['error'])
@@ -57,6 +68,7 @@ async def lifespan(app: FastAPI):
     print("Сервер запускается... Подготовка зависимостей...")
 
     # Шаг 1: Убедимся, что модель Ollama доступна
+    # ... (этот блок остается без изменений) ...
     ollama_ready = False
     max_retries = 20
     retry_delay = 15
@@ -76,11 +88,19 @@ async def lifespan(app: FastAPI):
         model_kwargs={'device': 'cpu'},
         cache_folder=MODEL_CACHE_PATH
     )
-    reranker_model = HuggingFaceCrossEncoder(
-        model_name=RERANKER_MODEL_NAME,
-        cache_folder=MODEL_CACHE_PATH
+
+
+
+
+    # --- ИЗМЕНЕНИЕ: Загружаем модель Whisper ---
+    print(f"Загрузка модели Whisper '{WHISPER_MODEL_NAME}'...")
+    # Сохраняем pipeline в app.state, чтобы он был доступен в эндпоинтах
+    app.state.stt_pipeline = pipeline(
+        "automatic-speech-recognition",
+        model=WHISPER_MODEL_NAME,
+        device="cpu"  # Используем CPU, измените на "cuda:0" если есть GPU
     )
-    print("Embedding и Reranker модели успешно загружены.")
+    print("✅ Модель Whisper успешно загружена.")
 
     print(f"Загрузка векторного хранилища из '{FAISS_INDEX_PATH}'...")
     vector_store = FAISS.load_local(
@@ -88,20 +108,30 @@ async def lifespan(app: FastAPI):
         embeddings=embedding_model,
         allow_dangerous_deserialization=True
     )
-    base_retriever = vector_store.as_retriever(search_kwargs={'k': 20})
 
-    compression_retriever = ContextualCompressionRetriever(
-        base_compressor=reranker_model,
-        base_retriever=base_retriever,
-        k=4
+    base_retriever = vector_store.as_retriever(search_kwargs={'k': 10})
+
+    # 1. Загружаем модель cross-encoder
+    print(f"Инициализация реранкера LangChain с моделью {RERANKER_MODEL_NAME}...")
+    reranker_model = HuggingFaceCrossEncoder(
+        model_name=RERANKER_MODEL_NAME,
+        model_kwargs={'device': 'cpu'}
     )
-    print("✅ Векторное хранилище и Re-ranker успешно настроены.")
+
+    # 2. Создаем компрессор на основе этой модели
+    compressor = CrossEncoderReranker(model=reranker_model, top_n=4)
+
+    # 3. Создаем ContextualCompressionRetriever, который ОБЪЕДИНЯЕТ базовый ретривер и компрессор.
+    compression_retriever = ContextualCompressionRetriever(
+        base_compressor=compressor,
+        base_retriever=base_retriever
+    )
 
     # Шаг 3: Инициализация RAG-цепочки
+    # ... (этот блок остается почти без изменений) ...
     try:
         print("Инициализация RAG-цепочки с моделью Ollama...")
         llm = ChatOllama(model=OLLAMA_MODEL_NAME, temperature=0.1, base_url=OLLAMA_BASE_URL)
-
         template = """Ты — дружелюбный и компетентный виртуальный помощник компании "Транснефть". Твоя главная цель — помогать пользователям, предоставляя понятные и точные ответы на основе внутренней базы знаний.
 
 СТИЛЬ ОБЩЕНИЯ:
@@ -133,18 +163,13 @@ async def lifespan(app: FastAPI):
         def format_docs(docs):
             return "\n\n".join(doc.page_content for doc in docs)
 
-        app.state.rag_chain = (
-                {
-                    "context": itemgetter("question") | compression_retriever | format_docs,
-                    "question": itemgetter("question"),
-                    "chat_history": itemgetter("chat_history")
-                }
-                | prompt
-                | llm
-                | StrOutputParser()
-        )
+        app.state.rag_chain = ({
+                                   "context": itemgetter("question") | compression_retriever | format_docs,
+                                   "question": itemgetter("question"),
+                                   "chat_history": itemgetter("chat_history")
+                               } | prompt | llm | StrOutputParser()
+                               )
         print(" RAG-цепочка успешно создана.")
-
     except Exception as e:
         print(f" ОШИБКА при создании RAG-цепочки: {e}")
         raise RuntimeError("Could not create RAG chain") from e
@@ -157,37 +182,21 @@ async def lifespan(app: FastAPI):
 # --- ИНИЦИАЛИЗАЦИЯ ПРИЛОЖЕНИЯ ---
 app = FastAPI(title="Transneft AI Assistant API", lifespan=lifespan)
 origins = ["http://localhost", "http://localhost:3000", "http://localhost:5173", "http://localhost:80"]
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=origins, allow_credentials=True, allow_methods=["*"], allow_headers=["*"],
-)
+app.add_middleware(CORSMiddleware, allow_origins=origins, allow_credentials=True, allow_methods=["*"],
+                   allow_headers=["*"], )
 
 
+# --- МОДЕЛИ ДАННЫХ ---
 class ChatRequest(BaseModel):
     question: str
     session_id: str
 
 
-@app.get("/api/chat/history/{session_id}", summary="Получить историю чата")
-async def get_chat_history(session_id: str):
-    history_json = redis_client.get(session_id)
-    if history_json: return json.loads(history_json)
-    return []
-
-
-# --- API ЭНДПОИНТЫ ---
-@app.post("/api/chat", summary="Получить ответ от ассистента")
-async def get_answer(request: ChatRequest):
-    print("\n" + "=" * 50)
-    print(f"ПОЛУЧЕН ЗАПРОС: /api/chat. ID сессии: {request.session_id}")
-    print(f"Вопрос: {request.question}")
-
-    rag_chain = request.app.state.rag_chain
-    if not rag_chain:
-        raise HTTPException(status_code=503, detail="Сервер еще инициализируется.")
-
+# --- ИЗМЕНЕНИЕ: Рефакторинг основной логики чата в отдельную функцию ---
+async def _process_chat_logic(session_id: str, question: str, rag_chain: object) -> dict:
+    """Обрабатывает запрос, вызывает RAG и обновляет историю в Redis."""
     try:
-        history_json = redis_client.get(request.session_id)
+        history_json = redis_client.get(session_id)
         chat_history_list = json.loads(history_json) if history_json else []
         formatted_chat_history = "\n".join(
             [f"{msg['sender']}: {msg['text']}" for msg in chat_history_list[-4:]]
@@ -195,18 +204,81 @@ async def get_answer(request: ChatRequest):
 
         print("Вызов RAG-цепочки с историей...")
         response_text = rag_chain.invoke({
-            "question": request.question,
+            "question": question,
             "chat_history": formatted_chat_history
         })
         print(f"ПОЛУЧЕН ОТВЕТ от LLM: {response_text}")
-        print("=" * 50 + "\n")
 
-        chat_history_list.append({"sender": "user", "text": request.question})
+        chat_history_list.append({"sender": "user", "text": question})
         chat_history_list.append({"sender": "bot", "text": response_text})
-        redis_client.set(request.session_id, json.dumps(chat_history_list), ex=3600)
+        redis_client.set(session_id, json.dumps(chat_history_list), ex=3600)
 
-        return {"answer": response_text}
+        return {"answer": response_text, "question_text": question}
 
     except Exception as e:
         print(f" ОШИБКА при обработке запроса: {e}")
         raise HTTPException(status_code=500, detail=f"Произошла внутренняя ошибка: {e}")
+
+
+# --- API ЭНДПОИНТЫ ---
+@app.get("/api/chat/history/{session_id}", summary="Получить историю чата")
+async def get_chat_history(session_id: str):
+    history_json = redis_client.get(session_id)
+    if history_json: return json.loads(history_json)
+    return []
+
+
+@app.post("/api/chat", summary="Получить ответ от ассистента (текст)")
+async def get_answer_text(request: ChatRequest, fastapi_request: Request):
+    print("\n" + "=" * 50)
+    print(f"ПОЛУЧЕН ТЕКСТОВЫЙ ЗАПРОС: /api/chat. ID сессии: {request.session_id}")
+    print(f"Вопрос: {request.question}")
+
+    rag_chain = fastapi_request.app.state.rag_chain
+    if not rag_chain:
+        raise HTTPException(status_code=503, detail="Сервер еще инициализируется.")
+
+    response = await _process_chat_logic(request.session_id, request.question, rag_chain)
+    print("=" * 50 + "\n")
+    return {"answer": response["answer"]}
+
+
+# --- ИЗМЕНЕНИЕ: Новый эндпоинт для приема аудио ---
+@app.post("/api/chat/audio", summary="Получить ответ от ассистента (аудио)")
+async def get_answer_audio(
+        fastapi_request: Request,
+        session_id: str = Form(...),
+        audio_file: UploadFile = File(...)
+):
+    print("\n" + "=" * 50)
+    print(f"ПОЛУЧЕН АУДИО ЗАПРОС: /api/chat/audio. ID сессии: {session_id}")
+    print(f"Имя файла: {audio_file.filename}, Тип: {audio_file.content_type}")
+
+    rag_chain = fastapi_request.app.state.rag_chain
+    stt_pipeline = fastapi_request.app.state.stt_pipeline
+    if not rag_chain or not stt_pipeline:
+        raise HTTPException(status_code=503, detail="Сервер еще инициализируется.")
+
+    # Шаг 1: Читаем байты аудиофайла
+    audio_bytes = await audio_file.read()
+    if not audio_bytes:
+        raise HTTPException(status_code=400, detail="Аудиофайл пуст.")
+
+    # Шаг 2: Распознаем речь с помощью Whisper
+    print("Распознавание речи с помощью Whisper...")
+    try:
+        transcription_result = stt_pipeline(audio_bytes)
+        question_text = transcription_result["text"].strip()
+        print(f"Текст распознан: '{question_text}'")
+        if not question_text:
+            raise HTTPException(status_code=400, detail="Не удалось распознать речь в аудиофайле.")
+    except Exception as e:
+        print(f" ОШИБКА при распознавании речи: {e}")
+        raise HTTPException(status_code=500, detail="Не удалось обработать аудиофайл.")
+
+    # Шаг 3: Используем распознанный текст для вызова основной RAG-логики
+    response = await _process_chat_logic(session_id, question_text, rag_chain)
+    print("=" * 50 + "\n")
+
+    # Возвращаем и ответ, и то, как был распознан вопрос
+    return {"answer": response["answer"], "transcribed_question": response["question_text"]}

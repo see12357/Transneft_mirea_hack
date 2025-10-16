@@ -30,3 +30,6 @@ nltk
 rouge_score
 flashrank
 langchain-huggingface
+torch
+torchaudio
+transformers
