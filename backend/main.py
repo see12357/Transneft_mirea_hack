@@ -16,8 +16,7 @@ from langchain_ollama import ChatOllama
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
 from operator import itemgetter
-from langchain.retrievers.document_compressors import CrossEncoderReranker
-
+import numpy as np
 from langchain.retrievers import ContextualCompressionRetriever
 from langchain_community.cross_encoders import HuggingFaceCrossEncoder
 from langchain.retrievers.document_compressors import CrossEncoderReranker
@@ -127,7 +126,7 @@ async def lifespan(app: FastAPI):
         model=WHISPER_MODEL_NAME,
         device="cpu"  # Используем CPU, измените на "cuda:0" если есть GPU
     )
-    print("✅ Модель Whisper успешно загружена.")
+    print(" Модель Whisper успешно загружена.")
 
     print(f"Загрузка векторного хранилища из '{FAISS_INDEX_PATH}'...")
     vector_store = FAISS.load_local(
@@ -289,40 +288,43 @@ async def get_answer_audio(
     if not rag_chain or not stt_pipeline:
         raise HTTPException(status_code=503, detail="Сервер еще инициализируется.")
 
-    # Шаг 1: Читаем байты аудиофайла
     audio_bytes = await audio_file.read()
     if not audio_bytes:
         raise HTTPException(status_code=400, detail="Аудиофайл пуст.")
 
-    # --- ИЗМЕНЕНИЕ: Явная конвертация аудио ---
     print("Конвертация аудио для Whisper...")
     try:
-        # 1. Загружаем аудио из байтов
-        audio = AudioSegment.from_file(io.BytesIO(audio_bytes))
+        audio_segment = AudioSegment.from_file(io.BytesIO(audio_bytes))
+        audio_segment = audio_segment.set_frame_rate(16000).set_channels(1)
 
-        # 2. Устанавливаем нужные параметры: 16kHz, моно, 16-bit
-        audio = audio.set_frame_rate(16000).set_channels(1).set_sample_width(2)
+        # --- ИЗМЕНЕНИЕ: Преобразуем аудио в NumPy array ---
+        # 1. Получаем сэмплы как массив чисел
+        samples = np.array(audio_segment.get_array_of_samples())
 
-        # 3. Получаем "сырые" байты для pipeline
-        raw_audio_bytes = audio.raw_data
+        # 2. Нормализуем их в диапазон от -1.0 до 1.0 (float32), как ожидает Whisper
+        # Максимальное значение для 16-bit аудио - 32768.0
+        samples = samples.astype(np.float32) / 32768.0
 
     except Exception as e:
         print(f" ОШИБКА при конвертации аудио: {e}")
-        raise HTTPException(status_code=500, detail="Не удалось сконвертировать аудиофайл.")
-    # ----------------------------------------
+        raise HTTPException(status_code=500, detail=f"Не удалось сконвертировать аудиофайл: {e}")
 
     print("Распознавание речи с помощью Whisper...")
     try:
-        # Передаем "сырые" байты в pipeline
-        transcription_result = stt_pipeline({"raw": raw_audio_bytes, "sampling_rate": 16000})
+        # --- ИЗМЕНЕНИЕ: Передаем NumPy array в pipeline ---
+        transcription_result = stt_pipeline(samples)
+
         question_text = transcription_result["text"].strip()
         print(f"Текст распознан: '{question_text}'")
         if not question_text:
-            raise HTTPException(status_code=400, detail="Не удалось распознать речь в аудиофайле.")
+            # Это сообщение теперь будет показываться на фронтенде
+            return {"answer": "Не удалось распознать аудио. Попробуйте еще раз.", "transcribed_question": ""}
+
     except Exception as e:
         print(f" ОШИБКА при распознавании речи: {e}")
-        raise HTTPException(status_code=500, detail="Не удалось обработать аудиофайл.")
+        raise HTTPException(status_code=500, detail=f"Ошибка в модели Whisper: {e}")
 
+    # Если распознавание прошло успешно, вызываем основную логику
     response = await _process_chat_logic(session_id, question_text, rag_chain)
     print("=" * 50 + "\n")
 

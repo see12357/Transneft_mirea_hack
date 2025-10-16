@@ -13,61 +13,56 @@ import {
   Typography
 } from '@mui/material';
 
-// --- КОМПОНЕНТ 1: Анимированный аватар (для Кейсов 1 и 2) ---
+// --- КОМПОНЕНТ 1: АНИМИРОВАННЫЙ АВАТАР ---
 const AvatarVideo = ({ chatState }) => {
   const videoRef = useRef(null);
-  const [currentVideoSrc, setCurrentVideoSrc] = useState('/videos/greeting.mp4');
-  const [isLooping, setIsLooping] = useState(false);
+  // Используем useState для управления источником видео и зацикливанием
+  const [currentVideo, setCurrentVideo] = useState({ src: '/videos/greeting.mp4', loop: false });
 
   useEffect(() => {
-    let src = '/videos/idle.mp4';
-    let loop = true;
+    let newSrc = '/videos/idle.mp4';
+    let newLoop = true;
 
     switch (chatState) {
       case 'greeting':
-        src = '/videos/greeting.mp4';
-        loop = false;
+        newSrc = '/videos/greeting.mp4';
+        newLoop = false;
         break;
-      case 'thinking': // Когда бот "думает"
-        src = '/videos/idle.mp4';
-        loop = true;
+      case 'thinking':
+        newSrc = '/videos/idle.mp4';
+        newLoop = true;
         break;
-      case 'speaking': // Когда бот "говорит" (озвучивает)
-        src = '/videos/suggest_question.mp4'; // Используем "вовлекающую" анимацию
-        loop = false;
+      case 'speaking':
+        newSrc = '/videos/suggest_question.mp4';
+        newLoop = false;
         break;
       case 'idle':
       default:
-        src = '/videos/idle.mp4';
-        loop = true;
+        newSrc = '/videos/idle.mp4';
+        newLoop = true;
         break;
     }
 
-    if (currentVideoSrc !== src) {
-      setCurrentVideoSrc(src);
+    // Обновляем состояние, только если что-то изменилось
+    if (currentVideo.src !== newSrc) {
+      setCurrentVideo({ src: newSrc, loop: newLoop });
     }
-    setIsLooping(loop);
+  }, [chatState, currentVideo.src]);
 
-  }, [chatState, currentVideoSrc]);
-
-  // Эффект для плавного перехода в idle-состояние после одноразовых анимаций
+  // Этот эффект отвечает за возврат к idle-анимации после одноразовых
   useEffect(() => {
     const videoElement = videoRef.current;
-    if (!videoElement || isLooping) return;
+    if (!videoElement || currentVideo.loop) return;
 
     const handleVideoEnd = () => {
-      // После завершения анимации "приветствия" или "говорения", переключаемся на "ожидание"
-      setCurrentVideoSrc('/videos/idle.mp4');
-      setIsLooping(true);
+      setCurrentVideo({ src: '/videos/idle.mp4', loop: true });
     };
 
     videoElement.addEventListener('ended', handleVideoEnd);
     return () => {
-      // Очищаем слушатель при размонтировании или смене видео
       videoElement.removeEventListener('ended', handleVideoEnd);
     };
-  }, [currentVideoSrc, isLooping]);
-
+  }, [currentVideo.loop]);
 
   return (
     <Box
@@ -86,16 +81,16 @@ const AvatarVideo = ({ chatState }) => {
     >
       <video
         ref={videoRef}
-        key={currentVideoSrc} // Ключ важен для перезапуска <video> при смене источника
+        key={currentVideo.src} // Этот ключ заставляет React перезагрузить <video> при смене src
         width="100%"
         height="auto"
         autoPlay
         muted
-        loop={isLooping}
-        playsInline // Важно для корректной работы на мобильных устройствах
+        loop={currentVideo.loop}
+        playsInline
         style={{ borderRadius: 8, marginBottom: 8 }}
       >
-        <source src={currentVideoSrc} type="video/mp4" />
+        <source src={currentVideo.src} type="video/mp4" />
         Ваш браузер не поддерживает видео.
       </video>
       <Typography variant="subtitle2" align="center" color="text.secondary">
@@ -105,9 +100,8 @@ const AvatarVideo = ({ chatState }) => {
   );
 };
 
-// --- КОМПОНЕНТ 2: Основной интерфейс чата ---
 
-// Функция для получения или создания session_id из localStorage
+// --- КОМПОНЕНТ 2: ОСНОВНОЙ ИНТЕРФЕЙС ЧАТА ---
 const getSessionId = () => {
   let sessionId = localStorage.getItem('chatSessionId');
   if (!sessionId) {
@@ -127,11 +121,12 @@ const ChatInterface = ({ mode, toggleColorMode }) => {
   const mediaRecorderRef = useRef(null);
   const audioChunksRef = useRef([]);
   const [ttsEnabled, setTtsEnabled] = useState(() => localStorage.getItem('ttsEnabled') === 'true');
-  const isTtsSupported = typeof window !== 'undefined' && 'speechSynthesis' in window;
   const [voices, setVoices] = useState([]);
-  const [chatState, setChatState] = useState('greeting'); // 'greeting', 'idle', 'thinking', 'speaking'
+  const [chatState, setChatState] = useState('greeting');
 
-  // Загрузка истории чата с сервера при первом рендере
+  const isTtsSupported = typeof window !== 'undefined' && 'speechSynthesis' in window;
+
+  // Загрузка истории чата
   useEffect(() => {
     const fetchHistory = async () => {
       setIsLoading(true);
@@ -141,7 +136,7 @@ const ChatInterface = ({ mode, toggleColorMode }) => {
           const data = await response.json();
           setMessages(data);
           if (data.length > 0) {
-            setChatState('idle'); // Если история есть, аватар сразу в состоянии ожидания
+            setChatState('idle');
           }
         }
       } catch (error) {
@@ -153,36 +148,38 @@ const ChatInterface = ({ mode, toggleColorMode }) => {
     fetchHistory();
   }, [sessionId]);
 
-  // Загрузка доступных голосов для TTS
+  // Загрузка голосов для TTS
   useEffect(() => {
     if (!isTtsSupported) return;
-    const loadVoices = () => {
+    const populateVoiceList = () => {
       const availableVoices = window.speechSynthesis.getVoices();
       if (availableVoices.length > 0) {
         setVoices(availableVoices);
+        console.log("Доступные русские голоса:", availableVoices.filter(v => v.lang.startsWith('ru')));
       }
     };
-    loadVoices();
-    window.speechSynthesis.onvoiceschanged = loadVoices;
+    populateVoiceList();
+    if (window.speechSynthesis.onvoiceschanged !== undefined) {
+      window.speechSynthesis.onvoiceschanged = populateVoiceList;
+    }
     return () => {
       window.speechSynthesis.onvoiceschanged = null;
     };
   }, [isTtsSupported]);
 
-  // Функция отправки текстового/распознанного сообщения
+  // Отправка текстового сообщения
   const handleSend = async (questionText = input) => {
     if (!questionText.trim() || isLoading) return;
 
     const userMessage = { sender: 'user', text: questionText };
     setMessages(prev => [...prev, userMessage]);
 
-    // Очищаем поле ввода только если отправляем из него, а не распознанный текст
     if (questionText === input) {
       setInput('');
     }
 
     setIsLoading(true);
-    setChatState('thinking'); // Переключаем аватара в режим "думает"
+    setChatState('thinking');
 
     try {
       const response = await fetch('/api/chat', {
@@ -190,67 +187,67 @@ const ChatInterface = ({ mode, toggleColorMode }) => {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ question: questionText, session_id: sessionId }),
       });
-      if (!response.ok) {
-        throw new Error(`HTTP error! status: ${response.status}`);
-      }
+      if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
       const data = await response.json();
       const botMessage = { sender: 'bot', text: data.answer };
       setMessages(prev => [...prev, botMessage]);
     } catch (error) {
       console.error("Ошибка при отправке сообщения:", error);
-      const errorMessage = { sender: 'bot', text: 'Произошла ошибка. Попробуйте снова.' };
-      setMessages(prev => [...prev, errorMessage]);
+      setMessages(prev => [...prev, { sender: 'bot', text: 'Произошла ошибка. Попробуйте снова.' }]);
     } finally {
       setIsLoading(false);
-      setChatState('speaking'); // Переключаем аватара в режим "говорит"
+      // TTS useEffect сам переключит состояние в 'speaking' или 'idle'
     }
   };
 
-  // Автоскролл к последнему сообщению
+  // Автоскролл
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
-  // Озвучивание новых сообщений бота при включенном TTS
+  // Озвучивание ответов бота (TTS)
   useEffect(() => {
-    if (!ttsEnabled || !isTtsSupported || !messages.length || voices.length === 0) {
-      return;
-    }
-
     const lastMessage = messages[messages.length - 1];
 
     if (lastMessage && lastMessage.sender === 'bot' && lastMessage.text) {
-      try {
-        window.speechSynthesis.cancel(); // Отменяем предыдущее озвучивание
+      if (ttsEnabled && isTtsSupported && voices.length > 0) {
+        try {
+          window.speechSynthesis.cancel();
 
-        // Очищаем текст от Markdown для корректного произношения
-        let cleanText = lastMessage.text
-          .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1') // [текст](url) -> текст
-          .replace(/\*\*/g, '') // **жирный** -> жирный
-          .replace(/#/g, '');   // #Заголовок -> Заголовок
+          let cleanText = lastMessage.text
+            .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')
+            .replace(/`/g, '').replace(/\*/g, '').replace(/#/g, '').replace(/_/g, '')
+            .replace(/\//g, ' ');
 
-        const utterance = new SpeechSynthesisUtterance(cleanText);
-        utterance.lang = 'ru-RU';
-        utterance.rate = 0.95; // Немного замедляем речь
+          const utterance = new SpeechSynthesisUtterance(cleanText);
+          utterance.lang = 'ru-RU';
+          utterance.rate = 0.9;
+          utterance.pitch = 1.0;
 
-        // Продвинутый выбор голоса
-        let bestVoice = voices.find(v => v.lang.startsWith('ru') && v.name.includes('Google') && v.name.toLowerCase().includes('male'));
-        if (!bestVoice) bestVoice = voices.find(v => v.lang.startsWith('ru') && v.gender === 'male');
-        if (!bestVoice) bestVoice = voices.find(v => v.lang.startsWith('ru') && v.name.includes('Google'));
-        if (!bestVoice) bestVoice = voices.find(v => v.lang.startsWith('ru'));
+          let bestVoice = voices.find(v => v.lang.startsWith('ru') && v.name.includes('Google') && v.name.toLowerCase().includes('male'));
+          if (!bestVoice) bestVoice = voices.find(v => v.lang.startsWith('ru') && v.gender === 'male');
+          if (!bestVoice) bestVoice = voices.find(v => v.lang.startsWith('ru') && v.name.includes('Google'));
+          if (!bestVoice) bestVoice = voices.find(v => v.lang.startsWith('ru'));
 
-        if (bestVoice) {
-          utterance.voice = bestVoice;
+          if (bestVoice) {
+            utterance.voice = bestVoice;
+            console.log("Выбран голос для TTS:", bestVoice.name);
+          } else {
+            console.warn("Русские голоса не найдены, используется голос по умолчанию.");
+          }
+
+          utterance.onstart = () => setChatState('speaking');
+          utterance.onend = () => setChatState('idle');
+          utterance.onerror = () => setChatState('idle');
+
+          window.speechSynthesis.speak(utterance);
+        } catch (e) {
+          console.error("Ошибка синтеза речи:", e);
+          setChatState('idle');
         }
-
-        // Когда озвучка заканчивается, возвращаем аватара в idle-состояние
-        utterance.onend = () => setChatState('idle');
-
-        window.speechSynthesis.speak(utterance);
-
-      } catch (e) {
-        console.error("Ошибка синтеза речи:", e);
-        setChatState('idle'); // В случае ошибки все равно возвращаем в idle
+      } else {
+        // Если TTS выключен, но пришло сообщение, сразу переводим в idle
+        setChatState('idle');
       }
     }
   }, [messages, ttsEnabled, isTtsSupported, voices]);
@@ -269,63 +266,48 @@ const ChatInterface = ({ mode, toggleColorMode }) => {
     }
   };
 
-  // Запись и отправка голосового сообщения
+  // Запись и отправка аудио (ASR)
   const handleRecordToggle = async () => {
     if (isRecording) {
       mediaRecorderRef.current?.stop();
       setIsRecording(false);
-      setIsLoading(true); // Показываем индикатор, пока аудио обрабатывается
-      setChatState('thinking');
       return;
     }
 
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      const recorder = new MediaRecorder(stream);
+      const recorder = new MediaRecorder(stream, { mimeType: 'audio/webm' });
       audioChunksRef.current = [];
 
       recorder.ondataavailable = (event) => {
-        if (event.data.size > 0) {
-          audioChunksRef.current.push(event.data);
-        }
+        if (event.data.size > 0) audioChunksRef.current.push(event.data);
       };
 
       recorder.onstop = async () => {
+        setIsLoading(true);
+        setChatState('thinking');
+
         const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
         const formData = new FormData();
         formData.append('session_id', sessionId);
         formData.append('audio_file', audioBlob, 'voice-message.webm');
 
         try {
-          const response = await fetch('/api/chat/audio', {
-            method: 'POST',
-            body: formData,
-          });
-          if (!response.ok) {
-            throw new Error(`HTTP error! status: ${response.status}`);
-          }
+          const response = await fetch('/api/chat/audio', { method: 'POST', body: formData });
+          if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
           const data = await response.json();
 
-          if (data && data.transcribed_question) {
-            // Добавляем распознанный вопрос в историю и передаем его в handleSend
-            const userMessage = { sender: 'user', text: data.transcribed_question };
-            setMessages(prev => [...prev, userMessage]);
+          const userMessageText = data.transcribed_question || "(Не удалось распознать)";
+          const userMessage = { sender: 'user', text: userMessageText };
+          const botMessage = { sender: 'bot', text: data.answer };
 
-            // Теперь вызываем RAG-цепочку
-            const botMessage = { sender: 'bot', text: data.answer };
-            setMessages(prev => [...prev, botMessage]);
-
-          } else {
-             throw new Error("Некорректный ответ от сервера");
-          }
+          // Добавляем оба сообщения вместе для одного обновления рендера
+          setMessages(prev => [...prev, userMessage, botMessage]);
         } catch (err) {
           console.error('Ошибка отправки аудио:', err);
-          const errorMessage = { sender: 'bot', text: 'Не удалось распознать аудио. Попробуйте еще раз.' };
-          setMessages(prev => [...prev, errorMessage]);
+          setMessages(prev => [...prev, { sender: 'bot', text: 'Произошла ошибка при обработке аудио.' }]);
         } finally {
           setIsLoading(false);
-          setChatState('speaking');
-          // Останавливаем все дорожки микрофона
           stream.getTracks().forEach(track => track.stop());
         }
       };
@@ -334,17 +316,15 @@ const ChatInterface = ({ mode, toggleColorMode }) => {
       recorder.start();
       setIsRecording(true);
     } catch (err) {
-      console.error('Доступ к микрофону отклонен или не поддерживается:', err);
-      alert('Не удалось получить доступ к микрофону. Пожалуйста, проверьте разрешения в настройках вашего браузера.');
+      console.error('Доступ к микрофону отклонен:', err);
+      alert('Не удалось получить доступ к микрофону. Проверьте разрешения в настройках браузера.');
     }
   };
 
   return (
     <Box display="flex" flexDirection="column" height="100vh" width="100%" sx={{ bgcolor: 'background.default' }}>
       <AppBar position="sticky" color="default" elevation={0} sx={{
-        borderBottom: 1,
-        borderColor: 'divider',
-        backdropFilter: 'blur(8px)',
+        borderBottom: 1, borderColor: 'divider', backdropFilter: 'blur(8px)',
         bgcolor: mode === 'dark' ? 'rgba(18, 18, 18, 0.8)' : 'rgba(255, 255, 255, 0.8)'
       }}>
         <Toolbar sx={{ maxWidth: 1200, mx: 'auto', width: '100%', py: 1 }}>
@@ -354,15 +334,7 @@ const ChatInterface = ({ mode, toggleColorMode }) => {
             <Typography variant="caption" color="text.secondary" sx={{ fontSize: '0.75rem', fontWeight: 500 }}>ПАО «Транснефть»</Typography>
           </Box>
           <Box sx={{ flex: 1 }} />
-          <IconButton
-            onClick={toggleColorMode}
-            color="secondary"
-            aria-label="toggle theme"
-            sx={{
-              ml: 1, p: 1.5, borderRadius: 2, bgcolor: 'action.hover',
-              color: 'secondary.main', '&:hover': { bgcolor: 'action.selected', color: 'secondary.dark' }
-            }}
-          >
+          <IconButton onClick={toggleColorMode} color="secondary" aria-label="toggle theme" sx={{ ml: 1, p: 1.5, borderRadius: 2, bgcolor: 'action.hover', color: 'secondary.main', '&:hover': { bgcolor: 'action.selected', color: 'secondary.dark' } }}>
             {mode === 'dark' ? <Moon size={20} /> : <Sun size={20} />}
           </IconButton>
         </Toolbar>
@@ -371,17 +343,10 @@ const ChatInterface = ({ mode, toggleColorMode }) => {
       <Box sx={{ flex: 1, display: 'flex', justifyContent: 'center', overflow: 'hidden' }}>
         <Box sx={{ display: 'flex', width: '100%', maxWidth: 1200, gap: 2, height: '100%' }}>
 
-          {/* Блок с анимированным аватаром */}
-          <Box
-            sx={{
-              display: { xs: 'none', md: 'flex' }, flexDirection: 'column', alignItems: 'center',
-              justifyContent: 'center', minWidth: 180, maxWidth: 220, height: '100%',
-            }}
-          >
+          <Box sx={{ display: { xs: 'none', md: 'flex' }, flexDirection: 'column', alignItems: 'center', justifyContent: 'center', minWidth: 220, maxWidth: 260, height: '100%', p: 2 }}>
             <AvatarVideo chatState={chatState} />
           </Box>
 
-          {/* Область сообщений */}
           <Box id="messages-scroll" sx={{ flex: 1, overflowY: 'auto', px: { xs: 2, sm: 3, md: 4 }, py: 3 }}>
             <Box display="flex" flexDirection="column" gap={1.5}>
 
@@ -394,14 +359,10 @@ const ChatInterface = ({ mode, toggleColorMode }) => {
                       bgcolor: isUser ? 'primary.main' : 'background.paper',
                       color: isUser ? 'primary.contrastText' : 'text.primary',
                       borderRadius: 3, border: isUser ? 'none' : '1px solid',
-                      borderColor: isUser ? 'transparent' : 'divider',
-                      boxShadow: isUser ? '0 2px 8px rgba(0, 0, 0, 0.1)' : '0 1px 3px rgba(0, 0, 0, 0.05)',
-                      transition: 'all 0.2s ease-in-out',
-                      '&:hover': { boxShadow: isUser ? '0 4px 12px rgba(0, 0, 0, 0.15)' : '0 2px 6px rgba(0, 0, 0, 0.08)' }
+                      borderColor: 'transparent',
+                      boxShadow: '0 2px 8px rgba(0,0,0,0.1)',
                     }}>
-                      <Typography variant="body1" sx={{
-                        whiteSpace: 'pre-wrap', wordBreak: 'break-word', fontSize: '0.95rem', lineHeight: 1.5
-                      }}>
+                      <Typography variant="body1" sx={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word', fontSize: '0.95rem', lineHeight: 1.5 }}>
                         {msg.text}
                       </Typography>
                     </Paper>
@@ -411,10 +372,7 @@ const ChatInterface = ({ mode, toggleColorMode }) => {
 
               {isLoading && (
                 <Box display="flex" justifyContent="flex-start" sx={{ mb: 1 }}>
-                  <Paper elevation={1} sx={{
-                    px: 2.5, py: 1.5, borderRadius: 3, border: '1px solid', borderColor: 'divider',
-                    bgcolor: 'background.paper', boxShadow: '0 1px 3px rgba(0, 0, 0, 0.05)'
-                  }}>
+                  <Paper elevation={1} sx={{ px: 2.5, py: 1.5, borderRadius: 3, bgcolor: 'background.paper', boxShadow: '0 1px 3px rgba(0,0,0,0.05)' }}>
                     <Box display="flex" alignItems="center" gap={1.5}>
                       <CircularProgress size={18} thickness={4} />
                       <Typography variant="body2" color="text.secondary" sx={{ fontWeight: 500 }}>Обработка...</Typography>
@@ -428,29 +386,22 @@ const ChatInterface = ({ mode, toggleColorMode }) => {
         </Box>
       </Box>
 
-      {/* Поле ввода */}
       <Box sx={{
         position: 'sticky', bottom: 0, borderTop: 1, borderColor: 'divider',
         bgcolor: mode === 'dark' ? 'rgba(18, 18, 18, 0.8)' : 'rgba(255, 255, 255, 0.8)',
         backdropFilter: 'blur(8px)'
       }}>
-        <Box sx={{ maxWidth: 1200, mx: 'auto', width: '100%', p: 3 }}>
+        <Box sx={{ maxWidth: 1200, mx: 'auto', width: '100%', p: { xs: 2, sm: 3 } }}>
           <Paper
             component="form"
             onSubmit={(e) => { e.preventDefault(); handleSend(); }}
             sx={{
-              display: 'flex', alignItems: 'center', px: 2, py: 1,
-              bgcolor: 'background.paper', borderRadius: 4, border: '1px solid', borderColor: 'divider',
-              boxShadow: '0 2px 8px rgba(0, 0, 0, 0.1)', transition: 'all 0.2s ease-in-out',
-              '&:focus-within': { boxShadow: '0 4px 12px rgba(0, 0, 0, 0.15)', borderColor: 'primary.main' }
+              display: 'flex', alignItems: 'center', px: 2, py: 1, bgcolor: 'background.paper',
+              borderRadius: 4, border: '1px solid', borderColor: 'divider', boxShadow: '0 2px 8px rgba(0,0,0,0.1)',
+              '&:focus-within': { boxShadow: '0 4px 12px rgba(0,0,0,0.15)', borderColor: 'primary.main' }
             }}
           >
-            <IconButton
-              onClick={handleToggleTts}
-              color={ttsEnabled ? 'primary' : 'default'}
-              aria-label="toggle tts"
-              sx={{ mr: 1, p: 1.25, borderRadius: 2 }}
-            >
+            <IconButton onClick={handleToggleTts} color={ttsEnabled ? 'primary' : 'default'} aria-label="toggle tts" sx={{ mr: 1, p: 1.25, borderRadius: 2 }}>
               {ttsEnabled ? <Volume2 size={20} /> : <VolumeX size={20} />}
             </IconButton>
 
@@ -460,36 +411,19 @@ const ChatInterface = ({ mode, toggleColorMode }) => {
               onChange={(e) => setInput(e.target.value)}
               disabled={isLoading}
               onKeyPress={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSend(); } }}
-              sx={{
-                ml: 1, flex: 1, py: 1.5, fontSize: '0.95rem',
-                '& .MuiInputBase-input': { '&::placeholder': { opacity: 0.7, fontWeight: 400 } }
-              }}
+              sx={{ ml: 1, flex: 1, py: 1.5, fontSize: '0.95rem' }}
+              multiline
+              maxRows={5}
             />
-            <IconButton
-              onClick={handleRecordToggle}
-              color={isRecording ? 'secondary' : 'default'}
-              aria-label="record voice"
-              disabled={isLoading}
-              sx={{
-                mr: 1, p: 1.5, borderRadius: 2, bgcolor: isRecording ? 'secondary.main' : 'action.hover',
-                color: isRecording ? 'secondary.contrastText' : 'text.secondary',
-                transition: 'all 0.2s ease-in-out',
-                '&:hover': { bgcolor: isRecording ? 'secondary.dark' : 'action.selected' }
-              }}
-            >
+            <IconButton onClick={handleRecordToggle} color={isRecording ? 'error' : 'default'} aria-label="record voice" disabled={isLoading} sx={{
+                mr: 1, p: 1.5, borderRadius: 2,
+                bgcolor: isRecording ? 'error.main' : 'action.hover',
+                color: isRecording ? 'error.contrastText' : 'text.secondary',
+                '&:hover': { bgcolor: isRecording ? 'error.dark' : 'action.selected' }
+              }}>
               {isRecording ? <MicOff size={20} /> : <Mic size={20} />}
             </IconButton>
-            <IconButton
-              type="submit"
-              color="primary"
-              disabled={isLoading || !input.trim()}
-              sx={{
-                p: 1.5, borderRadius: 2, bgcolor: input.trim() ? 'primary.main' : 'action.hover',
-                color: input.trim() ? 'primary.contrastText' : 'text.secondary',
-                transition: 'all 0.2s ease-in-out',
-                '&:hover': { bgcolor: input.trim() ? 'primary.dark' : 'action.selected' }
-              }}
-            >
+            <IconButton type="submit" color="primary" disabled={isLoading || !input.trim()} sx={{ p: 1.5, borderRadius: 2 }}>
               <Send size={20} />
             </IconButton>
           </Paper>

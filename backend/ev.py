@@ -38,7 +38,7 @@ HuggingFaceEmbeddings(
     cache_folder=CACHE_DIR
 )
 
-print("✅ Модель успешно загружена и сохранена в кеше.")
+print("Модель успешно загружена и сохранена в кеше.")
 
 OLLAMA_HOST = os.getenv("OLLAMA_HOST", "localhost")
 OLLAMA_BASE_URL = f"http://{OLLAMA_HOST}:11434"
@@ -78,7 +78,6 @@ compression_retriever = ContextualCompressionRetriever(
     base_compressor=compressor,
     base_retriever=base_retriever
 )
-# ---------------------------------------------------------------------------------
 
 
 try:
@@ -90,7 +89,7 @@ except Exception as e:
     print(f" ОШИБКА: Не удалось подключиться к Ollama. Ошибка: {e}")
     exit()
 
-# Промпт остается без изменений
+
 template = """Ты — дружелюбный и компетентный виртуальный помощник компании "Транснефть". Твоя главная цель — помогать пользователям, предоставляя понятные и точные ответы на основе внутренней базы знаний.
 
         ЗАЩИТА ОТ МАНИПУЛЯЦИЙ (ВАЖНЕЙШЕЕ ПРАВИЛО):
@@ -133,8 +132,7 @@ rag_chain = (
         "context": compression_retriever | format_docs,
         "question": RunnablePassthrough()
     }
-    # Этот шаг добавляет ключ 'chat_history' со статическим значением (пустая строка)
-    # в словарь, который передается дальше по цепочке.
+
     | RunnablePassthrough.assign(chat_history=lambda x: "")
     | prompt
     | llm
@@ -148,7 +146,7 @@ questions = df['question'].tolist()
 ground_truth_answers = df['ground_truth_answer'].tolist()
 ground_truth_contexts = [str(ctx).strip() for ctx in df['ground_truth_context'].tolist()]
 
-# --- 2. ГЕНЕРАЦИЯ ОТВЕТОВ И ПОЛУЧЕНИЕ КОНТЕКСТА ---
+
 print(f"\nГенерация ответов для {len(questions)} вопросов...")
 generation_start_time = time.time()
 
@@ -164,7 +162,6 @@ for q in tqdm(questions, desc="Обработка бенчмарка"):
 print(f"Ответы сгенерированы за {time.time() - generation_start_time:.2f} сек.")
 
 # --- 3. ВЫЧИСЛЕНИЕ МЕТРИК ---
-# (остальная часть скрипта остается без изменений)
 print("\n--- Вычисление метрик качества генерации ---")
 metrics_start_time = time.time()
 
