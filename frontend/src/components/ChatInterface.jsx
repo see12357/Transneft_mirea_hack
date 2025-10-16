@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Send, Sun, Moon } from 'lucide-react';
+import { Send, Sun, Moon, Mic, MicOff, Volume2, VolumeX } from 'lucide-react';
 import { v4 as uuidv4 } from 'uuid';
 import {
   AppBar,
@@ -30,6 +30,15 @@ const ChatInterface = ({ mode, toggleColorMode }) => {
   const [isLoading, setIsLoading] = useState(false);
   const [sessionId] = useState(getSessionId()); // Получаем ID при первом рендере
   const messagesEndRef = useRef(null);
+  const [isRecording, setIsRecording] = useState(false);
+  const mediaRecorderRef = useRef(null);
+  const audioChunksRef = useRef([]);
+  const prevMessagesLengthRef = useRef(0);
+  const [ttsEnabled, setTtsEnabled] = useState(() => {
+    const saved = localStorage.getItem('ttsEnabled');
+    return saved ? saved === 'true' : false;
+  });
+  const isTtsSupported = typeof window !== 'undefined' && 'speechSynthesis' in window;
 
   // 1. Загружаем историю чата с сервера при первой загрузке
   useEffect(() => {
@@ -86,6 +95,111 @@ const ChatInterface = ({ mode, toggleColorMode }) => {
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
+
+  // 4. Озвучивание новых сообщений бота при включенном TTS
+  useEffect(() => {
+    if (!ttsEnabled || !isTtsSupported) {
+      prevMessagesLengthRef.current = messages.length;
+      return;
+    }
+    if (messages.length > 0 && messages.length > prevMessagesLengthRef.current) {
+      const last = messages[messages.length - 1];
+      if (last.sender === 'bot' && last.text) {
+        try {
+          window.speechSynthesis.cancel();
+          const utterance = new SpeechSynthesisUtterance(last.text);
+          utterance.lang = 'ru-RU';
+          // Выбираем русскую озвучку при наличии
+          const voices = window.speechSynthesis.getVoices();
+          const ruVoice = voices.find(v => v.lang?.toLowerCase().startsWith('ru'));
+          if (ruVoice) utterance.voice = ruVoice;
+          window.speechSynthesis.speak(utterance);
+        } catch (e) {
+          // Игнорируем ошибки синтеза речи
+        }
+      }
+      prevMessagesLengthRef.current = messages.length;
+    }
+  }, [messages, ttsEnabled, isTtsSupported]);
+
+  const handleToggleTts = () => {
+    if (!isTtsSupported) {
+      alert('Озвучка не поддерживается в этом браузере.');
+      return;
+    }
+    if (!ttsEnabled) {
+      const ok = window.confirm('Включить озвучку ответов ассистента?');
+      if (!ok) return;
+    }
+    const newValue = !ttsEnabled;
+    setTtsEnabled(newValue);
+    localStorage.setItem('ttsEnabled', String(newValue));
+    if (!newValue) {
+      try { window.speechSynthesis.cancel(); } catch (e) {}
+    }
+  };
+
+  // 5. Запись и отправка голосового сообщения
+  const handleRecordToggle = async () => {
+    if (isRecording) {
+      try {
+        mediaRecorderRef.current?.stop();
+      } catch (e) {}
+      setIsRecording(false);
+      return;
+    }
+
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const mimeTypeOptions = [
+        'audio/webm;codecs=opus',
+        'audio/webm',
+        'audio/ogg;codecs=opus',
+        'audio/ogg'
+      ];
+      let chosenMime = '';
+      for (const opt of mimeTypeOptions) {
+        if (MediaRecorder.isTypeSupported(opt)) { chosenMime = opt; break; }
+      }
+      const recorder = new MediaRecorder(stream, chosenMime ? { mimeType: chosenMime } : undefined);
+      audioChunksRef.current = [];
+      recorder.ondataavailable = (e) => {
+        if (e.data && e.data.size > 0) audioChunksRef.current.push(e.data);
+      };
+      recorder.onstop = async () => {
+        const blob = new Blob(audioChunksRef.current, { type: recorder.mimeType || 'audio/webm' });
+        audioChunksRef.current = [];
+        try {
+          setIsLoading(true);
+          // Отправляем как form-data: session_id и audio_file
+          const form = new FormData();
+          form.append('session_id', sessionId);
+          const fileName = `recording.${blob.type.includes('ogg') ? 'ogg' : 'webm'}`;
+          form.append('audio_file', blob, fileName);
+          const resp = await fetch('/api/chat/audio', { method: 'POST', body: form });
+          const data = await resp.json();
+
+          // Показываем распознанный вопрос и ответ
+          if (data?.transcribed_question) {
+            setMessages(prev => [...prev, { sender: 'user', text: data.transcribed_question }]);
+          }
+          setMessages(prev => [...prev, { sender: 'bot', text: data?.answer || 'Нет ответа' }]);
+        } catch (err) {
+          console.error('Ошибка отправки аудио:', err);
+          setMessages(prev => [...prev, { sender: 'bot', text: 'Не удалось распознать аудио. Попробуйте еще раз.' }]);
+        } finally {
+          setIsLoading(false);
+          try { stream.getTracks().forEach(t => t.stop()); } catch (e) {}
+        }
+      };
+      mediaRecorderRef.current = recorder;
+      recorder.start();
+      setIsRecording(true);
+    } catch (err) {
+      console.error('Доступ к микрофону отклонен или не поддерживается:', err);
+      alert('Не удалось получить доступ к микрофону. Проверьте разрешения браузера.');
+    }
+  };
 
   return (
     <Box display="flex" flexDirection="column" height="100vh" width="100%" sx={{ bgcolor: 'background.default' }}>
@@ -255,6 +369,15 @@ const ChatInterface = ({ mode, toggleColorMode }) => {
               }
             }}
           >
+            <IconButton
+              onClick={handleToggleTts}
+              color={ttsEnabled ? 'primary' : 'default'}
+              aria-label="toggle tts"
+              sx={{ mr: 1, p: 1.25, borderRadius: 2 }}
+            >
+              {ttsEnabled ? <Volume2 size={20} /> : <VolumeX size={20} />}
+            </IconButton>
+
             <InputBase
               placeholder="Задайте ваш вопрос..."
               value={input}
@@ -273,6 +396,25 @@ const ChatInterface = ({ mode, toggleColorMode }) => {
                 }
               }}
             />
+            <IconButton
+              onClick={handleRecordToggle}
+              color={isRecording ? 'secondary' : 'default'}
+              aria-label="record voice"
+              disabled={isLoading}
+              sx={{ 
+                mr: 1,
+                p: 1.5, 
+                borderRadius: 2,
+                bgcolor: isRecording ? 'secondary.main' : 'action.hover',
+                color: isRecording ? 'secondary.contrastText' : 'text.secondary',
+                transition: 'all 0.2s ease-in-out',
+                '&:hover': {
+                  bgcolor: isRecording ? 'secondary.dark' : 'action.selected'
+                }
+              }}
+            >
+              {isRecording ? <MicOff size={20} /> : <Mic size={20} />}
+            </IconButton>
             <IconButton 
               type="submit" 
               color="primary" 
