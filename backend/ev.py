@@ -1,3 +1,4 @@
+import os
 import pandas as pd
 import evaluate
 import numpy as np
@@ -6,120 +7,145 @@ from langchain_community.embeddings import HuggingFaceEmbeddings
 from langchain_community.vectorstores import FAISS
 from langchain_ollama import ChatOllama
 from langchain_core.prompts import ChatPromptTemplate
-from langchain_core.runnables import RunnablePassthrough, RunnableParallel
+from langchain_core.runnables import RunnablePassthrough
 from langchain_core.output_parsers import StrOutputParser
 from sentence_transformers import SentenceTransformer
-from sklearn.metrics.pairwise import cosine_similarity
+from tqdm import tqdm
+from langchain.retrievers import ContextualCompressionRetriever
+from langchain_community.cross_encoders import HuggingFaceCrossEncoder
+from langchain.retrievers.document_compressors import CrossEncoderReranker
 
 # --- НАСТРОЙКИ ---
 BENCHMARK_FILE_PATH = "benchmark.csv"
 FAISS_INDEX_PATH = "data/faiss_index_gemma"
-OLLAMA_MODEL_NAME = "gemma3:1b-it-qat"
-OLLAMA_BASE_URL = "http://ollama:11434"
+OLLAMA_MODEL_NAME = "gemma3:4b-it-qat"
 EMBEDDING_MODEL_NAME = "Qwen/Qwen3-Embedding-0.6B"
+RERANKER_MODEL_NAME = "cross-encoder/ms-marco-MiniLM-L-6-v2"
 BGE_MODEL_NAME = "BAAI/bge-m3"
-MODEL_CACHE_PATH = "/root/.cache/huggingface"
+MODEL_CACHE_PATH = "backend/models_cache"
+
+OLLAMA_HOST = os.getenv("OLLAMA_HOST", "localhost")
+OLLAMA_BASE_URL = f"http://{OLLAMA_HOST}:11434"
 
 # --- 1. ЗАГРУЗКА RAG-СИСТЕМЫ И БЕНЧМАРКА ---
-
-print("Загрузка RAG-системы...")
+print("Загрузка RAG-системы для бенчмарка...")
 start_time = time.time()
 
-# Инициализируем компоненты RAG
 embedding_model = HuggingFaceEmbeddings(
     model_name=EMBEDDING_MODEL_NAME,
     model_kwargs={'device': 'cpu'},
     cache_folder=MODEL_CACHE_PATH
 )
 
-# Загружаем ЛОКАЛЬНЫЙ (кэшированный) индекс FAISS, который был скопирован в контейнер
+# Загружаем векторное хранилище
 vector_store = FAISS.load_local(
     FAISS_INDEX_PATH,
     embeddings=embedding_model,
     allow_dangerous_deserialization=True
 )
-retriever = vector_store.as_retriever(search_kwargs={'k': 10})
 
-# Подключаемся к LLM в контейнере OLLAMA по его сервисному имени
+base_retriever = vector_store.as_retriever(search_kwargs={'k': 15})
+
+
+# 1. Загружаем модель cross-encoder
+print(f"Инициализация реранкера LangChain с моделью {RERANKER_MODEL_NAME}...")
+reranker_model = HuggingFaceCrossEncoder(
+    model_name=RERANKER_MODEL_NAME,
+    model_kwargs={'device': 'cpu'}
+)
+
+# 2. Создаем компрессор на основе этой модели
+compressor = CrossEncoderReranker(model=reranker_model, top_n=4)
+
+# 3. Создаем ContextualCompressionRetriever, который ОБЪЕДИНЯЕТ базовый ретривер и компрессор.
+compression_retriever = ContextualCompressionRetriever(
+    base_compressor=compressor,
+    base_retriever=base_retriever
+)
+# ---------------------------------------------------------------------------------
+
+
 try:
     print(f"Подключение к Ollama по адресу: {OLLAMA_BASE_URL}")
-    llm = ChatOllama(
-        model=OLLAMA_MODEL_NAME,
-        temperature=0.1,
-        base_url=OLLAMA_BASE_URL
-    )
-    llm.invoke("Connection test") # Пробный вызов
-    print("✅ Успешное подключение к Ollama.")
+    llm = ChatOllama(model=OLLAMA_MODEL_NAME, temperature=0.1, base_url=OLLAMA_BASE_URL)
+    llm.invoke("Connection test")
+    print(" Успешное подключение к Ollama.")
 except Exception as e:
-    print(f"❌ ОШИБКА: Не удалось подключиться к Ollama. Ошибка: {e}")
-    exit() # Если нет LLM, дальше нет смысла
+    print(f" ОШИБКА: Не удалось подключиться к Ollama. Ошибка: {e}")
+    exit()
 
-template = """Ты — цифровой ассистент-консультант компании "Транснефть". Твоя задача — давать точные и фактические ответы, основываясь ИСКЛЮЧИТЕЛЬНО на предоставленном ниже контексте. Не используй свои общие знания.
+# Промпт остается без изменений
+template = """Ты — дружелюбный и компетентный виртуальный помощник компании "Транснефть". Твоя главная цель — помогать пользователям, предоставляя понятные и точные ответы на основе внутренней базы знаний.
 
-ИНСТРУКЦИИ:
-1. Внимательно изучи контекст.
-2. Ответь на вопрос пользователя, используя только информацию из этого контекста.
-3. Если в контексте нет информации для ответа на вопрос, ответь одной фразой: "К сожалению, в предоставленных мне материалах нет информации по вашему вопросу."
-4. Не выдумывай и не домысливай информацию.
+СТИЛЬ ОБЩЕНИЯ:
+- Всегда начинай ответ с вежливого и дружелюбного приветствия (например, "Здравствуйте!", "Добрый день!").
+- Говори простым и ясным языком. Избегай излишне формального или роботизированного тона.
+- Будь позитивным и готовым помочь.
 
-КОНТЕКСТ:
+ИНСТРУКЦИИ ПО РАБОТЕ С ИНФОРМАЦИЕЙ:
+1.  Внимательно изучи предоставленный КОНТЕКСТ. Твои ответы должны основываться **строго** на этой информации.
+2.  Не используй свои общие знания извне. Если в контексте чего-то нет, значит, ты этого не знаешь.
+3.  Структурируй сложные ответы, используя списки или абзацы для лучшего восприятия.
+4.  **Если в контексте нет ответа на вопрос**, вежливо сообщи об этом. Используй одну из фраз: "К сожалению, я не нашел информации по вашему вопросу в документах. Могу ли я помочь чем-то еще?" или "Простите, в моей базе знаний нет данных на этот счет. Пожалуйста, попробуйте переформулировать вопрос."
+5.  Завершай ответ позитивной фразой КОГДА ЭТО НУЖНО, например: "Надеюсь, это помогло!", "Если у вас есть еще вопросы, я готов помочь!" или "Рад был помочь!".
+
+КОНТЕКСТ ИЗ БАЗЫ ЗНАНИЙ (используй его для поиска фактов):
 {context}
 
-ВОПРОС ПОЛЬЗОВАТЕЛЯ:
+АКТУАЛЬНЫЙ ВОПРОС ПОЛЬЗОВАТЕЛЯ:
 {question}
 
-ТОЧНЫЙ ОТВЕТ:"""
+ТВОЙ ТОЧНЫЙ ДРУЖЕЛЮБНЫЙ ОТВЕТ:"""
 prompt = ChatPromptTemplate.from_template(template)
+
 
 def format_docs(docs):
     return "\n\n".join(doc.page_content for doc in docs)
 
-# <-- УЛУЧШЕНИЕ: Создаем эффективную цепочку, которая возвращает и ответ, и контекст
-# Это позволит избежать двойного вызова ретривера.
-map_docs = RunnableParallel(
-    context=retriever | format_docs,
-    question=RunnablePassthrough()
+
+rag_chain = (
+    {"context": compression_retriever | format_docs, "question": RunnablePassthrough()}
+    | prompt
+    | llm
+    | StrOutputParser()
 )
-rag_chain = map_docs | prompt | llm | StrOutputParser()
-
-# Цепочка для получения только документов
-retriever_chain = retriever.with_config(run_name="DocsRetriever")
-
-# Финальная параллельная цепочка
-full_chain = RunnableParallel(
-    generated_answer=rag_chain,
-    retrieved_docs=retriever_chain
-)
-
-print(f"RAG-система загружена за {time.time() - start_time:.2f} сек.")
+print(f"RAG-система с реранкером LangChain загружена за {time.time() - start_time:.2f} сек.")
 
 print(f"Загрузка бенчмарка из {BENCHMARK_FILE_PATH}...")
 df = pd.read_csv(BENCHMARK_FILE_PATH)
 questions = df['question'].tolist()
 ground_truth_answers = df['ground_truth_answer'].tolist()
-ground_truth_contexts = [str(ctx).strip().lower() for ctx in df['ground_truth_context'].tolist()]
+ground_truth_contexts = [str(ctx).strip() for ctx in df['ground_truth_context'].tolist()]
 
 # --- 2. ГЕНЕРАЦИЯ ОТВЕТОВ И ПОЛУЧЕНИЕ КОНТЕКСТА ---
+print(f"\nГенерация ответов для {len(questions)} вопросов...")
+generation_start_time = time.time()
 
-print("Генерация ответов по бенчмарку... Это может занять некоторое время.")
-start_time = time.time()
+generated_answers = []
+retrieved_contexts_list = []
 
-# <-- УЛУЧШЕНИЕ: Используем .batch() для параллельной обработки всех вопросов. Это НАМНОГО быстрее!
-results = full_chain.batch(questions)
+for q in tqdm(questions, desc="Обработка бенчмарка"):
+    generated_answers.append(rag_chain.invoke(q))
+    # Чтобы получить контекст для метрик, вызываем наш compression_retriever напрямую
+    retrieved_docs = compression_retriever.invoke(q)
+    retrieved_contexts_list.append([doc.page_content for doc in retrieved_docs])
 
-generated_answers = [res['generated_answer'] for res in results]
-retrieved_contexts_list = [[doc.page_content for doc in res['retrieved_docs']] for res in results]
-
-print(f"Ответы сгенерированы за {time.time() - start_time:.2f} сек.")
+print(f"Ответы сгенерированы за {time.time() - generation_start_time:.2f} сек.")
 
 # --- 3. ВЫЧИСЛЕНИЕ МЕТРИК ---
-
+# (остальная часть скрипта остается без изменений)
 print("\n--- Вычисление метрик качества генерации ---")
+metrics_start_time = time.time()
 
-rouge = evaluate.load('rouge')
-rouge_results = rouge.compute(predictions=generated_answers, references=ground_truth_answers)
-print(f"ROUGE-L: {rouge_results['rougeL']:.4f}")
+# ROUGE
+try:
+    rouge = evaluate.load('rouge')
+    rouge_results = rouge.compute(predictions=generated_answers, references=ground_truth_answers)
+    print(f"ROUGE-L: {rouge_results['rougeL']:.4f}")
+except Exception as e:
+    print(f"Не удалось посчитать ROUGE. Ошибка: {e}")
 
+# BLEURT
 try:
     bleurt = evaluate.load("bleurt", module_type="metric", checkpoint="bleurt-20")
     bleurt_results = bleurt.compute(predictions=generated_answers, references=ground_truth_answers)
@@ -127,36 +153,46 @@ try:
 except Exception as e:
     print(f"Не удалось посчитать BLEURT. Ошибка: {e}")
 
-print("Вычисление Semantic Answer Similarity (BGE-m3)...")
-bge_model = SentenceTransformer(BGE_MODEL_NAME)
-gt_embeddings = bge_model.encode(ground_truth_answers)
-gen_embeddings = bge_model.encode(generated_answers)
-similarities = [cosine_similarity([gt_emb], [gen_emb])[0][0] for gt_emb, gen_emb in zip(gt_embeddings, gen_embeddings)]
-semantic_similarity_score = np.mean(similarities)
-print(f"Semantic Answer Similarity: {semantic_similarity_score:.4f}")
+# Semantic Answer Similarity
+try:
+    print("Вычисление Semantic Answer Similarity (BGE-m3)...")
+    bge_model = SentenceTransformer(BGE_MODEL_NAME, cache_folder=MODEL_CACHE_PATH)
+    gt_embeddings = bge_model.encode(ground_truth_answers, show_progress_bar=True, normalize_embeddings=True)
+    gen_embeddings = bge_model.encode(generated_answers, show_progress_bar=True, normalize_embeddings=True)
+
+    similarities = (gt_embeddings * gen_embeddings).sum(axis=1)
+    semantic_similarity_score = np.mean(similarities)
+    print(f"Semantic Answer Similarity: {semantic_similarity_score:.4f}")
+except Exception as e:
+    print(f"Не удалось посчитать Semantic Answer Similarity. Ошибка: {e}")
 
 print("\n--- Вычисление метрик качества ретривера ---")
 
+K = 4
 relevant_ranks = []
 for gt_context, retrieved_contexts in zip(ground_truth_contexts, retrieved_contexts_list):
     rank = 0
-    # <-- УЛУЧШЕНИЕ: Более надежная проверка релевантности
+    gt_context_clean = ' '.join(gt_context.split()).lower()
     for i, ctx in enumerate(retrieved_contexts):
-        if gt_context in ctx.strip().lower():
+        ctx_clean = ' '.join(ctx.split()).lower()
+        if gt_context_clean in ctx_clean:
             rank = i + 1
             break
     relevant_ranks.append(rank)
 
 mrr_score = 0
 for rank in relevant_ranks:
-    if 0 < rank <= 10:
+    if 0 < rank <= K:
         mrr_score += 1 / rank
-mrr_score /= len(relevant_ranks)
-print(f"MRR@10: {mrr_score:.4f}")
+mrr_score = mrr_score / len(relevant_ranks) if relevant_ranks else 0
+print(f"MRR@{K}: {mrr_score:.4f}")
 
 ndcg_score = 0
 for rank in relevant_ranks:
-    if 0 < rank <= 10:
+    if 0 < rank <= K:
         ndcg_score += 1 / np.log2(rank + 1)
-ndcg_score /= len(relevant_ranks)
-print(f"NDCG@10: {ndcg_score:.4f}")
+ndcg_score = ndcg_score / len(relevant_ranks) if relevant_ranks else 0
+print(f"NDCG@{K}: {ndcg_score:.4f}")
+
+print(f"\nВсе метрики посчитаны за {time.time() - metrics_start_time:.2f} сек.")
+print(f"Общее время выполнения скрипта: {time.time() - metrics_start_time:.2f} сек.")

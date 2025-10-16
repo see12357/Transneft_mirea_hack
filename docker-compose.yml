@@ -34,24 +34,5 @@ services:
       - backend
     restart: unless-stopped
 
-  # --- НОВЫЙ СЕРВИС ДЛЯ ЗАПУСКА БЕНЧМАРКА ---
-  benchmark:
-    # Мы используем ту же сборку, что и для бэкенда,
-    # чтобы гарантировать идентичное окружение.
-    build:
-      context: ./backend
-      args:
-        - HF_TOKEN=${HF_TOKEN}
-
-    # Вместо запуска веб-сервера, мы запускаем ваш скрипт.
-    command: ["python", "ev.py"]
-
-    # Бенчмарку для работы нужен только Ollama.
-    depends_on:
-      - ollama
-
-    # Важно: мы не перезапускаем этот сервис. Он должен выполниться и завершиться.
-    restart: "no"
-
 volumes:
   ollama_data:

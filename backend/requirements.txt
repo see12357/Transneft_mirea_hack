@@ -28,3 +28,5 @@ huggingface_hub
 
 nltk
 rouge_score
+flashrank
+langchain-huggingface

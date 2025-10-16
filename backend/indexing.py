@@ -22,8 +22,8 @@ except Exception as e:
 # 2. Разделение текста на чанки
 print("Разделение текста на чанки...")
 text_splitter = RecursiveCharacterTextSplitter(
-    chunk_size=512,
-    chunk_overlap=100,
+    chunk_size=1024,
+    chunk_overlap=300,
     length_function=len,
 )
 chunks = text_splitter.split_text(full_text)
