@@ -22,7 +22,23 @@ OLLAMA_MODEL_NAME = "gemma3:4b-it-qat"
 EMBEDDING_MODEL_NAME = "Qwen/Qwen3-Embedding-0.6B"
 RERANKER_MODEL_NAME = "cross-encoder/ms-marco-MiniLM-L-6-v2"
 BGE_MODEL_NAME = "BAAI/bge-m3"
-MODEL_CACHE_PATH = "backend/models_cache"
+MODEL_CACHE_PATH = "models_cache"
+MODEL_NAME = "Qwen/Qwen3-Embedding-0.6B"
+CACHE_DIR = "models_cache" # Папка, куда будут скачаны модели
+
+if not os.path.exists(CACHE_DIR):
+    os.makedirs(CACHE_DIR)
+
+print(f"Начинаю загрузку модели '{MODEL_NAME}' в папку '{CACHE_DIR}'...")
+
+# Инициализируем модель, указав папку для кеширования
+# Это запустит процесс скачивания
+HuggingFaceEmbeddings(
+    model_name=MODEL_NAME,
+    cache_folder=CACHE_DIR
+)
+
+print("✅ Модель успешно загружена и сохранена в кеше.")
 
 OLLAMA_HOST = os.getenv("OLLAMA_HOST", "localhost")
 OLLAMA_BASE_URL = f"http://{OLLAMA_HOST}:11434"
