@@ -44,7 +44,7 @@ vector_store = FAISS.load_local(
     allow_dangerous_deserialization=True
 )
 
-base_retriever = vector_store.as_retriever(search_kwargs={'k': 15})
+base_retriever = vector_store.as_retriever(search_kwargs={'k': 10})
 
 
 # 1. Загружаем модель cross-encoder
