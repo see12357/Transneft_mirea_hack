@@ -16,8 +16,8 @@ faiss-cpu # Используйте faiss-gpu, если у вас настрое�
 sentence-transformers
 
 # --- Утилиты для обработки данных ---
-python-docx # Для чтения .docx файлов
-pandas # Для работы с CSV в скрипте оценки
+python-docx
+pandas
 
 evaluate
 

@@ -15,7 +15,7 @@ from langchain.retrievers import ContextualCompressionRetriever
 from langchain_community.cross_encoders import HuggingFaceCrossEncoder
 from langchain.retrievers.document_compressors import CrossEncoderReranker
 
-# --- НАСТРОЙКИ ---
+
 BENCHMARK_FILE_PATH = "benchmark.csv"
 FAISS_INDEX_PATH = "data/faiss_index_gemma"
 OLLAMA_MODEL_NAME = "gemma3:4b-it-qat"
@@ -24,7 +24,7 @@ RERANKER_MODEL_NAME = "cross-encoder/ms-marco-MiniLM-L-6-v2"
 BGE_MODEL_NAME = "BAAI/bge-m3"
 MODEL_CACHE_PATH = "models_cache"
 MODEL_NAME = "Qwen/Qwen3-Embedding-0.6B"
-CACHE_DIR = "models_cache" # Папка, куда будут скачаны модели
+CACHE_DIR = "models_cache"
 
 if not os.path.exists(CACHE_DIR):
     os.makedirs(CACHE_DIR)
@@ -42,7 +42,7 @@ print("Модель успешно загружена и сохранена в �
 OLLAMA_HOST = os.getenv("OLLAMA_HOST", "localhost")
 OLLAMA_BASE_URL = f"http://{OLLAMA_HOST}:11434"
 
-# --- 1. ЗАГРУЗКА RAG-СИСТЕМЫ И БЕНЧМАРКА ---
+
 print("Загрузка RAG-системы для бенчмарка...")
 start_time = time.time()
 
@@ -52,7 +52,7 @@ embedding_model = HuggingFaceEmbeddings(
     cache_folder=MODEL_CACHE_PATH
 )
 
-# Загружаем векторное хранилище
+
 vector_store = FAISS.load_local(
     FAISS_INDEX_PATH,
     embeddings=embedding_model,
@@ -62,17 +62,17 @@ vector_store = FAISS.load_local(
 base_retriever = vector_store.as_retriever(search_kwargs={'k': 10})
 
 
-# 1. Загружаем модель cross-encoder
+
 print(f"Инициализация реранкера LangChain с моделью {RERANKER_MODEL_NAME}...")
 reranker_model = HuggingFaceCrossEncoder(
     model_name=RERANKER_MODEL_NAME,
     model_kwargs={'device': 'cpu'}
 )
 
-# 2. Создаем компрессор на основе этой модели
+
 compressor = CrossEncoderReranker(model=reranker_model, top_n=4)
 
-# 3. Создаем ContextualCompressionRetriever, который ОБЪЕДИНЯЕТ базовый ретривер и компрессор.
+
 compression_retriever = ContextualCompressionRetriever(
     base_compressor=compressor,
     base_retriever=base_retriever
@@ -154,17 +154,16 @@ retrieved_contexts_list = []
 
 for q in tqdm(questions, desc="Обработка бенчмарка"):
     generated_answers.append(rag_chain.invoke(q))
-    # Чтобы получить контекст для метрик, вызываем наш compression_retriever напрямую
     retrieved_docs = compression_retriever.invoke(q)
     retrieved_contexts_list.append([doc.page_content for doc in retrieved_docs])
 
 print(f"Ответы сгенерированы за {time.time() - generation_start_time:.2f} сек.")
 
-# --- 3. ВЫЧИСЛЕНИЕ МЕТРИК ---
+
 print("\n--- Вычисление метрик качества генерации ---")
 metrics_start_time = time.time()
 
-# ROUGE
+
 try:
     rouge = evaluate.load('rouge')
     rouge_results = rouge.compute(predictions=generated_answers, references=ground_truth_answers)
@@ -172,7 +171,7 @@ try:
 except Exception as e:
     print(f"Не удалось посчитать ROUGE. Ошибка: {e}")
 
-# BLEURT
+
 try:
     bleurt = evaluate.load("bleurt", module_type="metric", checkpoint="bleurt-20")
     bleurt_results = bleurt.compute(predictions=generated_answers, references=ground_truth_answers)
@@ -180,7 +179,7 @@ try:
 except Exception as e:
     print(f"Не удалось посчитать BLEURT. Ошибка: {e}")
 
-# Semantic Answer Similarity
+
 try:
     print("Вычисление Semantic Answer Similarity (BGE-m3)...")
     bge_model = SentenceTransformer(BGE_MODEL_NAME, cache_folder=MODEL_CACHE_PATH)

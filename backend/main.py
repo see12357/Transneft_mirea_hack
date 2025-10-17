@@ -6,7 +6,6 @@
 из Hugging Face Hub для полноценного голосового и текстового взаимодействия.
 """
 
-# Стандартные библиотеки
 import os
 import re
 import json
@@ -19,7 +18,6 @@ from contextlib import asynccontextmanager
 from io import BytesIO
 from scipy.io.wavfile import write as write_wav
 
-# Сторонние библиотеки
 import redis
 import requests
 from fastapi import FastAPI, HTTPException, UploadFile, File, Form, Request
@@ -27,12 +25,9 @@ from pydantic import BaseModel
 from fastapi.middleware.cors import CORSMiddleware
 from operator import itemgetter
 
-# --- ИЗМЕНЕНИЕ: Библиотеки для ASR (STT) и TTS из Hugging Face ---
 import nemo.collections.asr as nemo_asr
 from transformers import VitsModel, AutoTokenizer
-# -----------------------------------------------------------------
 
-# Библиотеки LangChain
 from langchain_community.vectorstores import FAISS
 from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_community.cross_encoders import HuggingFaceCrossEncoder
@@ -42,7 +37,7 @@ from langchain_ollama import ChatOllama
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
 
-# --- Конфигурация приложения ---
+
 
 REDIS_HOST = os.getenv("REDIS_HOST", "localhost")
 OLLAMA_HOST = os.getenv("OLLAMA_HOST", "localhost")
@@ -52,17 +47,12 @@ EMBEDDING_MODEL_NAME = "Qwen/Qwen3-Embedding-0.6B"
 RERANKER_MODEL_NAME = "cross-encoder/ms-marco-MiniLM-L-6-v2"
 MODEL_CACHE_PATH = "/root/.cache/huggingface"
 OLLAMA_BASE_URL = f"http://{OLLAMA_HOST}:11434"
-
-# --- ИЗМЕНЕНИЕ: Конфигурация моделей из Hugging Face Hub ---
 STT_MODEL_NAME = "nvidia/stt_kk_ru_fastconformer_hybrid_large"
 TTS_MODEL_NAME = "facebook/mms-tts-rus"
-# -----------------------------------------------------------
 
-# --- Инициализация клиентов ---
+
 redis_client = redis.Redis(host=REDIS_HOST, port=6379, db=0, decode_responses=True)
 
-
-# --- Вспомогательные функции ---
 
 def create_prompt_template():
     """Создает и возвращает шаблон промпта для RAG-цепочки."""
@@ -132,7 +122,7 @@ def generate_tts_audio(text: str, model, tokenizer) -> str:
         with torch.no_grad():
             output = model(**inputs).waveform
 
-        # Конвертируем тензор в numpy массив, масштабируем и сохраняем в WAV
+
         waveform = output.squeeze().cpu().numpy()
         scaled_waveform = (waveform * 32767).astype(np.int16)
 
@@ -182,14 +172,14 @@ async def lifespan(app: FastAPI):
     device = "cuda" if torch.cuda.is_available() else "cpu"
     print(f"Используемое устройство: {device}")
 
-    # 1. Загрузка модели NeMo для распознавания речи (STT)
+
     print(f"Загрузка STT модели: {STT_MODEL_NAME}...")
     stt_model = nemo_asr.models.EncDecHybridRNNTCTCBPEModel.from_pretrained(model_name=STT_MODEL_NAME)
     stt_model.to(device)
     app.state.stt_model = stt_model
     print("STT модель успешно загружена.")
 
-    # 2. Загрузка модели MMS-TTS для синтеза речи
+
     print(f"Загрузка TTS модели: {TTS_MODEL_NAME}...")
     tts_model = VitsModel.from_pretrained(TTS_MODEL_NAME)
     tts_tokenizer = AutoTokenizer.from_pretrained(TTS_MODEL_NAME)
@@ -198,7 +188,7 @@ async def lifespan(app: FastAPI):
     app.state.tts_tokenizer = tts_tokenizer
     print("TTS модель успешно загружена.")
 
-    # 3. Загрузка моделей для RAG
+
     print("Загрузка моделей для RAG...")
     app.state.embedding_model = HuggingFaceEmbeddings(model_name=EMBEDDING_MODEL_NAME, model_kwargs={'device': device},
                                                       cache_folder=MODEL_CACHE_PATH)
@@ -229,7 +219,7 @@ async def lifespan(app: FastAPI):
     print("Сервер останавливается.")
 
 
-# --- Инициализация FastAPI ---
+
 app = FastAPI(title="Transneft AI Assistant API", lifespan=lifespan)
 app.add_middleware(CORSMiddleware, allow_origins=["http://localhost", "http://localhost:3000", "http://localhost:5173",
                                                   "http://localhost:80"], allow_credentials=True, allow_methods=["*"],
@@ -316,8 +306,6 @@ async def get_answer_audio(request: Request, session_id: str = Form(...), audio_
 
     filepath = None
     try:
-        # Мы сохраняем файл с расширением, которое пришло от браузера (скорее всего, .webm)
-        # NeMo с pydub/ffmpeg под капотом должен справиться
         suffix = os.path.splitext(audio_file.filename)[1] if audio_file.filename else ".webm"
         with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as temp_audio_file:
             temp_audio_file.write(audio_bytes)
@@ -328,9 +316,9 @@ async def get_answer_audio(request: Request, session_id: str = Form(...), audio_
 
         transcriptions = stt_model.transcribe(audio=[filepath])
 
-        # --- ИСПРАВЛЕНИЕ: Извлекаем текст из объекта Hypothesis ---
+
         question_text = transcriptions[0].text.strip() if transcriptions and hasattr(transcriptions[0], 'text') else ""
-        # --- КОНЕЦ ИСПРАВЛЕНИЯ ---
+
 
     except Exception as e:
         print(f"ОШИБКА при распознавании речи: {e}")
