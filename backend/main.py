@@ -2,8 +2,8 @@
 """
 Основной файл FastAPI-приложения для цифрового консультанта ПАО «Транснефть».
 
-Реализует RAG-цепочку, ASR (Silero STT) и TTS (Silero) для
-полноценного голосового и текстового взаимодействия.
+Реализует RAG-цепочку, ASR (NVIDIA NeMo) и TTS (Facebook MMS)
+из Hugging Face Hub для полноценного голосового и текстового взаимодействия.
 """
 
 # Стандартные библиотеки
@@ -17,7 +17,7 @@ import torch
 import numpy as np
 from contextlib import asynccontextmanager
 from io import BytesIO
-from scipy.io.wavfile import write as write_wav  # <-- ИЗМЕНЕНИЕ: Импорт для сохранения WAV
+from scipy.io.wavfile import write as write_wav
 
 # Сторонние библиотеки
 import redis
@@ -27,9 +27,14 @@ from pydantic import BaseModel
 from fastapi.middleware.cors import CORSMiddleware
 from operator import itemgetter
 
+# --- ИЗМЕНЕНИЕ: Библиотеки для ASR (STT) и TTS из Hugging Face ---
+import nemo.collections.asr as nemo_asr
+from transformers import VitsModel, AutoTokenizer
+# -----------------------------------------------------------------
+
 # Библиотеки LangChain
 from langchain_community.vectorstores import FAISS
-from langchain_community.embeddings import HuggingFaceEmbeddings
+from langchain_huggingface import HuggingFaceEmbeddings
 from langchain_community.cross_encoders import HuggingFaceCrossEncoder
 from langchain.retrievers.document_compressors import CrossEncoderReranker
 from langchain.retrievers import ContextualCompressionRetriever
@@ -48,16 +53,10 @@ RERANKER_MODEL_NAME = "cross-encoder/ms-marco-MiniLM-L-6-v2"
 MODEL_CACHE_PATH = "/root/.cache/huggingface"
 OLLAMA_BASE_URL = f"http://{OLLAMA_HOST}:11434"
 
-# --- Конфигурация Silero ---
-SILERO_REPO = 'snakers4/silero-models'
-# TTS (Text-to-Speech)
-SILERO_TTS_MODEL = 'silero_tts'
-SILERO_LANGUAGE = 'ru'
-SILERO_SPEAKER = 'aidar'  # Мягкий мужской голос
-SAMPLE_RATE = 48000  # Для TTS
-# STT (Speech-to-Text)
-SILERO_STT_MODEL = 'silero_stt'
-STT_LANGUAGE = 'ru'
+# --- ИЗМЕНЕНИЕ: Конфигурация моделей из Hugging Face Hub ---
+STT_MODEL_NAME = "nvidia/stt_kk_ru_fastconformer_hybrid_large"
+TTS_MODEL_NAME = "facebook/mms-tts-rus"
+# -----------------------------------------------------------
 
 # --- Инициализация клиентов ---
 redis_client = redis.Redis(host=REDIS_HOST, port=6379, db=0, decode_responses=True)
@@ -65,7 +64,7 @@ redis_client = redis.Redis(host=REDIS_HOST, port=6379, db=0, decode_responses=Tr
 
 # --- Вспомогательные функции ---
 
-def create_prompt_template() -> ChatPromptTemplate:
+def create_prompt_template():
     """Создает и возвращает шаблон промпта для RAG-цепочки."""
     template = """Ты — дружелюбный, этичный и компетентный виртуальный помощник компании "Транснефть". Твоя главная цель — помогать пользователям, предоставляя исключительно точные и проверенные ответы на основе внутренней базы знаний.
 
@@ -123,25 +122,23 @@ def sanitize_input(question: str) -> str:
     return question
 
 
-def generate_tts_audio(text: str, model, speaker: str, sample_rate: int) -> str:
-    """Генерирует аудио из текста с помощью Silero и возвращает его в Base64."""
+def generate_tts_audio(text: str, model, tokenizer) -> str:
+    """Генерирует аудио из текста с помощью MMS-TTS и возвращает его в Base64."""
     if not text:
         return ""
     print(f"Генерация TTS для текста: '{text[:50]}...'")
     try:
-        clean_text = re.sub(r'\[.*?\]\(.*?\)', '', text)
-        clean_text = re.sub(r'[\*\_`#\/]', ' ', clean_text).strip()
+        inputs = tokenizer(text, return_tensors="pt")
+        with torch.no_grad():
+            output = model(**inputs).waveform
 
-        audio_tensor = model.apply_tts(text=clean_text, speaker=speaker, sample_rate=sample_rate)
-
-        # --- ИЗМЕНЕНИЕ: Используем scipy вместо torchaudio ---
-        # Преобразуем тензор в numpy массив и масштабируем для 16-bit WAV
-        audio_numpy = (audio_tensor.numpy() * 32767).astype(np.int16)
+        # Конвертируем тензор в numpy массив, масштабируем и сохраняем в WAV
+        waveform = output.squeeze().cpu().numpy()
+        scaled_waveform = (waveform * 32767).astype(np.int16)
 
         buffer = BytesIO()
-        write_wav(buffer, sample_rate, audio_numpy)
+        write_wav(buffer, rate=model.config.sampling_rate, data=scaled_waveform)
         buffer.seek(0)
-        # --- КОНЕЦ ИЗМЕНЕНИЯ ---
 
         audio_base64 = base64.b64encode(buffer.read()).decode('utf-8')
         return audio_base64
@@ -155,7 +152,7 @@ def ensure_ollama_model(model_name: str, base_url: str) -> bool:
     print(f"Проверка наличия модели '{model_name}' в Ollama...")
     try:
         response = requests.post(f"{base_url}/api/pull", json={"name": model_name, "stream": False}, timeout=3600)
-        response.raise_for_status()
+        response.raise_for_status();
         response_json = response.json()
         if isinstance(response_json, dict) and "error" in response_json: raise Exception(response_json['error'])
         print(f"Модель '{model_name}' успешно загружена или уже была доступна.")
@@ -181,35 +178,32 @@ async def lifespan(app: FastAPI):
         time.sleep(15)
     if not ollama_ready: raise RuntimeError("Не удалось подготовить модель в Ollama.")
 
-    print("Загрузка AI-моделей...")
-    app.state.embedding_model = HuggingFaceEmbeddings(model_name=EMBEDDING_MODEL_NAME, model_kwargs={'device': 'cpu'},
-                                                      cache_folder=MODEL_CACHE_PATH)
-    reranker_model = HuggingFaceCrossEncoder(model_name=RERANKER_MODEL_NAME, model_kwargs={'device': 'cpu'})
+    print("Загрузка AI-моделей из Hugging Face Hub...")
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    print(f"Используемое устройство: {device}")
 
-    # --- ИЗМЕНЕНИЕ: Загрузка Silero STT вместо Whisper ---
-    print("Загрузка моделей Silero...")
-    torch.hub.set_dir(MODEL_CACHE_PATH)
-    device = torch.device('cpu')
+    # 1. Загрузка модели NeMo для распознавания речи (STT)
+    print(f"Загрузка STT модели: {STT_MODEL_NAME}...")
+    stt_model = nemo_asr.models.EncDecHybridRNNTCTCBPEModel.from_pretrained(model_name=STT_MODEL_NAME)
+    stt_model.to(device)
+    app.state.stt_model = stt_model
+    print("STT модель успешно загружена.")
 
-    # Загрузка модели Silero TTS (синтез речи)
-    tts_model, _ = torch.hub.load(repo_or_dir=SILERO_REPO, model=SILERO_TTS_MODEL, language=SILERO_LANGUAGE,
-                                  speaker='v3_1_ru')
+    # 2. Загрузка модели MMS-TTS для синтеза речи
+    print(f"Загрузка TTS модели: {TTS_MODEL_NAME}...")
+    tts_model = VitsModel.from_pretrained(TTS_MODEL_NAME)
+    tts_tokenizer = AutoTokenizer.from_pretrained(TTS_MODEL_NAME)
     tts_model.to(device)
     app.state.tts_model = tts_model
+    app.state.tts_tokenizer = tts_tokenizer
+    print("TTS модель успешно загружена.")
 
-    # Загрузка модели Silero STT (распознавание речи)
-    stt_model, decoder, utils = torch.hub.load(repo_or_dir=SILERO_REPO,
-                                               model=SILERO_STT_MODEL,
-                                               language=STT_LANGUAGE,
-                                               device=device)
-    app.state.stt_model = stt_model
-    app.state.stt_decoder = decoder
-    # Сохраняем утилиты для последующего использования
-    (app.state.read_batch, app.state.split_into_chunks,
-     app.state.read_audio, app.state.prepare_model_input) = utils
-
-    print("AI-модели успешно загружены.")
-    # --- КОНЕЦ ИЗМЕНЕНИЯ ---
+    # 3. Загрузка моделей для RAG
+    print("Загрузка моделей для RAG...")
+    app.state.embedding_model = HuggingFaceEmbeddings(model_name=EMBEDDING_MODEL_NAME, model_kwargs={'device': device},
+                                                      cache_folder=MODEL_CACHE_PATH)
+    reranker_model = HuggingFaceCrossEncoder(model_name=RERANKER_MODEL_NAME, model_kwargs={'device': device})
+    print("RAG-модели успешно загружены.")
 
     print(f"Загрузка векторного хранилища из '{FAISS_INDEX_PATH}'...")
     vector_store = FAISS.load_local(FAISS_INDEX_PATH, app.state.embedding_model, allow_dangerous_deserialization=True)
@@ -243,12 +237,16 @@ app.add_middleware(CORSMiddleware, allow_origins=["http://localhost", "http://lo
 
 
 class ChatRequest(BaseModel):
-    question: str
+    question: str;
     session_id: str
 
 
 # --- Основная логика ---
-async def _process_chat_logic(session_id: str, question: str, rag_chain: object, tts_model: object) -> dict:
+async def _process_chat_logic(session_id: str, question: str, request: Request) -> dict:
+    rag_chain = request.app.state.rag_chain
+    tts_model = request.app.state.tts_model
+    tts_tokenizer = request.app.state.tts_tokenizer
+
     sanitized_question = sanitize_input(question)
     intent = classify_intent(sanitized_question)
     response_text = ""
@@ -271,8 +269,7 @@ async def _process_chat_logic(session_id: str, question: str, rag_chain: object,
             raise HTTPException(status_code=500, detail=f"Внутренняя ошибка при генерации ответа: {e}")
 
     print(f"Сформирован ответ: {response_text}")
-    audio_content = generate_tts_audio(text=response_text, model=tts_model, speaker=SILERO_SPEAKER,
-                                       sample_rate=SAMPLE_RATE)
+    audio_content = generate_tts_audio(text=response_text, model=tts_model, tokenizer=tts_tokenizer)
 
     try:
         history_json = redis_client.get(session_id)
@@ -295,69 +292,56 @@ async def get_chat_history(session_id: str):
 
 @app.post("/api/chat", summary="Получить ответ от ассистента (текст)")
 async def get_answer_text(req_body: ChatRequest, request: Request):
-    print("\n" + "=" * 50)
-    print(f"ПОЛУЧЕН ТЕКСТОВЫЙ ЗАПРОС. ID сессии: {req_body.session_id}")
+    print("\n" + "=" * 50);
+    print(f"ПОЛУЧЕН ТЕКСТОВЫЙ ЗАПРОС. ID сессии: {req_body.session_id}");
     print(f"Вопрос: {req_body.question}")
-
-    rag_chain = request.app.state.rag_chain
-    tts_model = request.app.state.tts_model
-    if not rag_chain or not tts_model:
+    if not all([request.app.state.rag_chain, request.app.state.tts_model, request.app.state.tts_tokenizer]):
         raise HTTPException(status_code=503, detail="Сервер еще не готов.")
-
-    response = await _process_chat_logic(req_body.session_id, req_body.question, rag_chain, tts_model)
-    print("=" * 50)
+    response = await _process_chat_logic(req_body.session_id, req_body.question, request)
+    print("=" * 50);
     return response
 
 
 @app.post("/api/chat/audio", summary="Получить ответ от ассистента (аудио)")
 async def get_answer_audio(request: Request, session_id: str = Form(...), audio_file: UploadFile = File(...)):
-    print("\n" + "=" * 50)
+    print("\n" + "=" * 50);
     print(f"ПОЛУЧЕН АУДИО ЗАПРОС. ID сессии: {session_id}")
 
-    # --- ИЗМЕНЕНИЕ: Получаем модели и утилиты Silero STT ---
-    rag_chain = request.app.state.rag_chain
-    tts_model = request.app.state.tts_model
     stt_model = request.app.state.stt_model
-    stt_decoder = request.app.state.stt_decoder
-    read_audio = request.app.state.read_audio
-    prepare_model_input = request.app.state.prepare_model_input
-    # --- КОНЕЦ ИЗМЕНЕНИЯ ---
-
-    if not all([rag_chain, stt_model, tts_model, stt_decoder, read_audio, prepare_model_input]):
+    if not all([request.app.state.rag_chain, stt_model, request.app.state.tts_model]):
         raise HTTPException(status_code=503, detail="Сервер еще не готов.")
 
     audio_bytes = await audio_file.read()
-    if not audio_bytes:
-        raise HTTPException(status_code=400, detail="Аудиофайл пуст.")
+    if not audio_bytes: raise HTTPException(status_code=400, detail="Аудиофайл пуст.")
 
     try:
-        # --- ИЗМЕНЕНИЕ: Логика распознавания с помощью Silero STT ---
-        with tempfile.NamedTemporaryFile(delete=True, suffix=".wav") as temp_audio_file:
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as temp_audio_file:
             temp_audio_file.write(audio_bytes)
             temp_audio_file.flush()
+            filepath = temp_audio_file.name
 
-            print(f"Распознавание речи из файла: {temp_audio_file.name}...")
+        print(f"Распознавание речи из временного файла: {filepath}...")
+        # NeMo прекрасно работает с путями к файлам
+        transcriptions = stt_model.transcribe(paths2audio_files=[filepath])
 
-            # 1. Читаем аудиофайл с помощью утилиты Silero
-            wav_input = read_audio(temp_audio_file.name)
-            # 2. Готовим входные данные для модели
-            input_features = prepare_model_input(wav_input, device=torch.device('cpu'))
-            # 3. Прогоняем через модель
-            output = stt_model(input_features)
-            # 4. Декодируем результат в текст
-            question_text = stt_decoder(output[0].cpu()).strip()
-        # --- КОНЕЦ ИЗМЕНЕНИЯ ---
-
-        print(f"Текст распознан: '{question_text}'")
-        if not question_text:
-            response_text = "Не удалось распознать аудио. Попробуйте еще раз."
-            audio_content = generate_tts_audio(response_text, tts_model, SILERO_SPEAKER, SAMPLE_RATE)
-            return {"answer": response_text, "transcribed_question": "", "audio_content": audio_content}
+        # Извлекаем текст
+        question_text = transcriptions[0][0].strip() if transcriptions and transcriptions[0] else ""
 
     except Exception as e:
         print(f"ОШИБКА при распознавании речи: {e}")
         raise HTTPException(status_code=500, detail=f"Ошибка в модели распознавания речи: {e}")
+    finally:
+        if 'filepath' in locals() and os.path.exists(filepath):
+            os.remove(filepath)
 
-    response = await _process_chat_logic(session_id, question_text, rag_chain, tts_model)
+    print(f"Текст распознан: '{question_text}'")
+    if not question_text:
+        response_text = "Не удалось распознать речь. Пожалуйста, попробуйте еще раз."
+        tts_model = request.app.state.tts_model
+        tts_tokenizer = request.app.state.tts_tokenizer
+        audio_content = generate_tts_audio(response_text, tts_model, tts_tokenizer)
+        return {"answer": response_text, "question_text": "", "audio_content": audio_content}
+
+    response = await _process_chat_logic(session_id, question_text, request)
     print("=" * 50)
     return response

@@ -33,6 +33,7 @@ torch
 torchaudio
 transformers
 ffmpeg
-silero @ git+https://github.com/snakers4/silero-models.git
 scipy
 numpy
+nemo_toolkit
+accelerate
