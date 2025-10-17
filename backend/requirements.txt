@@ -1,27 +1,22 @@
-# --- Основа веб-сервера ---
 fastapi
 uvicorn[standard]
-python-multipart # Для CORS
+python-multipart
 
-# --- База данных и кэш ---
 redis
 
-# --- LangChain и RAG ---
 langchain
 langchain-community
 langchain-ollama
 
-# --- Векторный поиск ---
-faiss-cpu # Используйте faiss-gpu, если у вас настроен GPU
+faiss-cpu
 sentence-transformers
 
-# --- Утилиты для обработки данных ---
+
 python-docx
 pandas
 
 evaluate
 
-# --- Зависимости для BLEURT и Hugging Face ---
 tensorflow==2.15.0
 tf-keras
 huggingface_hub
@@ -32,8 +27,8 @@ langchain-huggingface
 torch
 torchaudio
 transformers
-ffmpeg
 scipy
 numpy
 nemo_toolkit[asr]
 soundfile
+bleurt @ git+https://github.com/google-research/bleurt.git

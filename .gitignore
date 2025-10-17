@@ -1,76 +1,56 @@
-# created by virtualenv automatically
 ../.venv/Lib
-# Игнорируем виртуальное окружение Python
 .venv/
 venv/
 env/
 
-# Игнорируем кэш Python и скомпилированные файлы
+
 __pycache__/
 *.pyc
 
-# Игнорируем папки с тяжелыми моделями
-# ВАЖНО: Никогда не загружайте LLM и Embedding модели в Git!
+
 /models/
 
-# Игнорируем сгенерированный индекс FAISS
-# Он создается автоматически из .docx файла, его не нужно хранить в репозитории
-# Игнорируем файлы IDE (для PyCharm, VSCode и т.д.)
+
 .idea/
 .vscode/
 
-# Игнорируем локальные файлы окружения (если будете использовать)
 .env
 
-# Логи и временные файлы
 *.log
 *.tmp
 
-# Общие файлы для игнорирования
 .idea/
 .vscode/
 *.log
 *.tmp
 .DS_Store
 
-# --- Backend (Python) ---
 
-# Виртуальное окружение
 backend/.venv/
 backend/venv/
 backend/env/
 
-# Кэш Python
 **/__pycache__/
 *.pyc
 
-# Папки с тяжелыми моделями
 backend/models/
 
-# Сгенерированный индекс FAISS
 
-
-
-# Локальные переменные окружения
 backend/.env
 
 backend/models_cache
 backend/models_cache/**
-# --- Frontend (React / Node.js) ---
 backend/backend
-# Папка с зависимостями
 frontend/node_modules/
 
-# Сборка проекта для продакшена
 frontend/build/
 
-# Логи ошибок
 frontend/npm-debug.log*
 frontend/yarn-error.log
 frontend/yarn.lock
 
-# Локальные переменные окружения
 frontend/.env.local
 frontend/.env.*.local
 frontend/.env
 /models_cache
+backend/checkpoints

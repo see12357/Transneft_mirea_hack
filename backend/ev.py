@@ -14,7 +14,7 @@ from tqdm import tqdm
 from langchain.retrievers import ContextualCompressionRetriever
 from langchain_community.cross_encoders import HuggingFaceCrossEncoder
 from langchain.retrievers.document_compressors import CrossEncoderReranker
-
+from bleurt import score
 
 BENCHMARK_FILE_PATH = "benchmark.csv"
 FAISS_INDEX_PATH = "data/faiss_index_gemma"
@@ -25,9 +25,8 @@ BGE_MODEL_NAME = "BAAI/bge-m3"
 MODEL_CACHE_PATH = "models_cache"
 MODEL_NAME = "Qwen/Qwen3-Embedding-0.6B"
 CACHE_DIR = "models_cache"
-
-if not os.path.exists(CACHE_DIR):
-    os.makedirs(CACHE_DIR)
+script_dir = os.path.dirname(os.path.abspath(__file__))
+BLEURT_CHECKPOINT_PATH = os.path.join(script_dir, "checkpoints", "BLEURT-20")
 
 print(f"Начинаю загрузку модели '{MODEL_NAME}' в папку '{CACHE_DIR}'...")
 
@@ -171,13 +170,28 @@ try:
 except Exception as e:
     print(f"Не удалось посчитать ROUGE. Ошибка: {e}")
 
-
 try:
-    bleurt = evaluate.load("bleurt", module_type="metric", checkpoint="bleurt-20")
-    bleurt_results = bleurt.compute(predictions=generated_answers, references=ground_truth_answers)
-    print(f"BLEURT-20 (среднее): {np.mean(bleurt_results['scores']):.4f}")
+    print(f"Загрузка BLEURT из локального чекпоинта: {BLEURT_CHECKPOINT_PATH}")
+
+
+    if not os.path.exists(BLEURT_CHECKPOINT_PATH):
+        raise FileNotFoundError(
+            f"Чекпоинт BLEURT не найден по пути '{BLEURT_CHECKPOINT_PATH}'.\n"
+            f"Пожалуйста, запустите скрипт 'python download_dependencies.py' для его скачивания."
+        )
+
+
+    scorer = score.BleurtScorer(BLEURT_CHECKPOINT_PATH)
+
+
+    bleurt_scores = scorer.score(references=ground_truth_answers, candidates=generated_answers)
+
+
+    print(f"BLEURT-20 (среднее): {np.mean(bleurt_scores):.4f}")
+
 except Exception as e:
     print(f"Не удалось посчитать BLEURT. Ошибка: {e}")
+
 
 
 try:
