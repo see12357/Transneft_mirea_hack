@@ -6,7 +6,7 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_community.embeddings import HuggingFaceEmbeddings # <-- ИЗМЕНЕНИЕ 1
 
 # --- НАСТРОЙКИ ---
-DOCX_FILE_PATH = "data/Реестр данных о компании ПАО Транснефть для хакатона весна-лета 2026.docx"
+DOCX_FILE_PATH = "backend/data/Реестр данных о компании ПАО Транснефть для хакатона весна-лета 2026.docx"
 FAISS_INDEX_PATH = "data/faiss_index_gemma"
 
 # 1. Загрузка и очистка документа

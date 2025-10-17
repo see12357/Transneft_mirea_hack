@@ -40,7 +40,7 @@ FAISS_INDEX_PATH = "data/faiss_index_gemma"
 OLLAMA_MODEL_NAME = "gemma3:4b-it-qat"
 EMBEDDING_MODEL_NAME = "Qwen/Qwen3-Embedding-0.6B"
 RERANKER_MODEL_NAME = "cross-encoder/ms-marco-MiniLM-L-6-v2"
-WHISPER_MODEL_NAME = "medium"
+WHISPER_MODEL_NAME = "small"
 MODEL_CACHE_PATH = "/root/.cache/huggingface"
 OLLAMA_BASE_URL = f"http://{OLLAMA_HOST}:11434"
 
@@ -144,6 +144,13 @@ def ensure_ollama_model(model_name: str, base_url: str) -> bool:
 async def lifespan(app: FastAPI):
     """Управляет жизненным циклом приложения, загружая модели при старте."""
     print("Сервер запускается... Подготовка зависимостей...")
+
+    print("Очистка истории чатов в Redis...")
+    try:
+        redis_client.flushdb()
+        print("Очистка завершена: Redis не содержит предыдущих сессий.")
+    except Exception as e:
+        print(f"Не удалось очистить Redis: {e}")
 
     ollama_ready = False
     for i in range(20):
