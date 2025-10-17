@@ -314,24 +314,29 @@ async def get_answer_audio(request: Request, session_id: str = Form(...), audio_
     audio_bytes = await audio_file.read()
     if not audio_bytes: raise HTTPException(status_code=400, detail="Аудиофайл пуст.")
 
+    filepath = None
     try:
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".wav") as temp_audio_file:
+        # Мы сохраняем файл с расширением, которое пришло от браузера (скорее всего, .webm)
+        # NeMo с pydub/ffmpeg под капотом должен справиться
+        suffix = os.path.splitext(audio_file.filename)[1] if audio_file.filename else ".webm"
+        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as temp_audio_file:
             temp_audio_file.write(audio_bytes)
             temp_audio_file.flush()
             filepath = temp_audio_file.name
 
         print(f"Распознавание речи из временного файла: {filepath}...")
-        # NeMo прекрасно работает с путями к файлам
-        transcriptions = stt_model.transcribe(paths2audio_files=[filepath])
 
-        # Извлекаем текст
-        question_text = transcriptions[0][0].strip() if transcriptions and transcriptions[0] else ""
+        transcriptions = stt_model.transcribe(audio=[filepath])
+
+        # --- ИСПРАВЛЕНИЕ: Извлекаем текст из объекта Hypothesis ---
+        question_text = transcriptions[0].text.strip() if transcriptions and hasattr(transcriptions[0], 'text') else ""
+        # --- КОНЕЦ ИСПРАВЛЕНИЯ ---
 
     except Exception as e:
         print(f"ОШИБКА при распознавании речи: {e}")
         raise HTTPException(status_code=500, detail=f"Ошибка в модели распознавания речи: {e}")
     finally:
-        if 'filepath' in locals() and os.path.exists(filepath):
+        if filepath and os.path.exists(filepath):
             os.remove(filepath)
 
     print(f"Текст распознан: '{question_text}'")
