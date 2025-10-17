@@ -35,5 +35,9 @@ transformers
 ffmpeg
 scipy
 numpy
-nemo_toolkit
-accelerate
+nemo_toolkit[all]
+hydra-core
+omegaconf
+webdataset
+tensorboard
+pytorch-lightning
