@@ -44,8 +44,20 @@
 #### 1.1 Предварительные требования
 - Установленный [Docker](https://www.docker.com/get-started/)
 - Установленный [Docker Compose](https://docs.docker.com/compose/install/)
+#### 1.2 Конфигурация (`.env` файл)
+Для скачивания AI-моделей из Hugging Face Hub во время сборки Docker-образа требуется токен доступа.
 
-#### 1.2 Запуск
+1.  **Получите токен:** Зарегистрируйтесь на [huggingface.co](https://huggingface.co/) и создайте токен доступа с правами на чтение (`read`) в настройках вашего профиля: `Settings -> Access Tokens`.
+2.  **Создайте файл `.env`:** В корневой папке проекта создайте файл с именем `.env`.
+3.  **Добавьте токен в файл:**
+    ```
+    HF_TOKEN=hf_XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX
+    ```
+    (Замените `hf_...` на ваш реальный токен).
+    
+    *Файл `.env` уже находится в `.gitignore`, чтобы предотвратить случайную утечку вашего токена в репозиторий.*
+
+#### 1.3 Запуск
 1.  **Клонируйте репозиторий:**
     ```bash
     git clone https://github.com/ВАШ_АККАУНТ/Transneft_mirea_hack.git
