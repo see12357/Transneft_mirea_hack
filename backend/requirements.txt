@@ -28,10 +28,10 @@ huggingface_hub
 
 nltk
 rouge_score
-flashrank
 langchain-huggingface
 torch
 torchaudio
 transformers
 openai-whisper
 ffmpeg
+silero @ git+https://github.com/snakers4/silero-models.git

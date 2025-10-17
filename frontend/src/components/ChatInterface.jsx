@@ -13,56 +13,55 @@ import {
   Typography
 } from '@mui/material';
 
-// --- КОМПОНЕНТ 1: АНИМИРОВАННЫЙ АВАТАР ---
-const AvatarVideo = ({ chatState }) => {
+// --- КОМПОНЕНТ 1: АНИМИРОВАННЫЙ АВАТАР С ПОДДЕРЖКОЙ ТЕМ ---
+const AvatarVideo = ({ chatState, mode }) => {
   const videoRef = useRef(null);
-  // Используем useState для управления источником видео и зацикливанием
-  const [currentVideo, setCurrentVideo] = useState({ src: '/videos/greeting.mp4', loop: false });
+  const [currentVideo, setCurrentVideo] = useState({ src: `/videos/greeting_${mode}.mp4`, loop: false });
 
   useEffect(() => {
-    let newSrc = '/videos/idle.mp4';
+    let baseName = 'idle';
     let newLoop = true;
 
     switch (chatState) {
       case 'greeting':
-        newSrc = '/videos/greeting.mp4';
+        baseName = 'greeting';
         newLoop = false;
         break;
       case 'thinking':
-        newSrc = '/videos/idle.mp4';
+        baseName = 'talking';
         newLoop = true;
         break;
       case 'speaking':
-        newSrc = '/videos/suggest_question.mp4';
+        baseName = 'speaking';
         newLoop = false;
         break;
       case 'idle':
       default:
-        newSrc = '/videos/idle.mp4';
+        baseName = 'talking';
         newLoop = true;
         break;
     }
 
-    // Обновляем состояние, только если что-то изменилось
+    const newSrc = `/videos/${baseName}_${mode}.mp4`;
+
     if (currentVideo.src !== newSrc) {
       setCurrentVideo({ src: newSrc, loop: newLoop });
     }
-  }, [chatState, currentVideo.src]);
+  }, [chatState, mode, currentVideo.src]);
 
-  // Этот эффект отвечает за возврат к idle-анимации после одноразовых
   useEffect(() => {
     const videoElement = videoRef.current;
     if (!videoElement || currentVideo.loop) return;
 
     const handleVideoEnd = () => {
-      setCurrentVideo({ src: '/videos/idle.mp4', loop: true });
+      setCurrentVideo({ src: `/videos/talking_${mode}.mp4`, loop: true });
     };
 
     videoElement.addEventListener('ended', handleVideoEnd);
     return () => {
       videoElement.removeEventListener('ended', handleVideoEnd);
     };
-  }, [currentVideo.loop]);
+  }, [currentVideo.loop, mode]);
 
   return (
     <Box
@@ -81,7 +80,7 @@ const AvatarVideo = ({ chatState }) => {
     >
       <video
         ref={videoRef}
-        key={currentVideo.src} // Этот ключ заставляет React перезагрузить <video> при смене src
+        key={currentVideo.src}
         width="100%"
         height="auto"
         autoPlay
@@ -99,7 +98,6 @@ const AvatarVideo = ({ chatState }) => {
     </Box>
   );
 };
-
 
 // --- КОМПОНЕНТ 2: ОСНОВНОЙ ИНТЕРФЕЙС ЧАТА ---
 const getSessionId = () => {
@@ -121,10 +119,8 @@ const ChatInterface = ({ mode, toggleColorMode }) => {
   const mediaRecorderRef = useRef(null);
   const audioChunksRef = useRef([]);
   const [ttsEnabled, setTtsEnabled] = useState(() => localStorage.getItem('ttsEnabled') === 'true');
-  const [voices, setVoices] = useState([]);
   const [chatState, setChatState] = useState('greeting');
-
-  const isTtsSupported = typeof window !== 'undefined' && 'speechSynthesis' in window;
+  const audioPlayerRef = useRef(null); // Реф для управления аудио-плеером
 
   // Загрузка истории чата
   useEffect(() => {
@@ -148,35 +144,32 @@ const ChatInterface = ({ mode, toggleColorMode }) => {
     fetchHistory();
   }, [sessionId]);
 
-  // Загрузка голосов для TTS
-  useEffect(() => {
-    if (!isTtsSupported) return;
-    const populateVoiceList = () => {
-      const availableVoices = window.speechSynthesis.getVoices();
-      if (availableVoices.length > 0) {
-        setVoices(availableVoices);
-        console.log("Доступные русские голоса:", availableVoices.filter(v => v.lang.startsWith('ru')));
-      }
-    };
-    populateVoiceList();
-    if (window.speechSynthesis.onvoiceschanged !== undefined) {
-      window.speechSynthesis.onvoiceschanged = populateVoiceList;
+  // --- НОВАЯ ФУНКЦИЯ: Проигрывание аудио из Base64 ---
+  const playAudioFromBase64 = (base64String) => {
+    if (audioPlayerRef.current) {
+      audioPlayerRef.current.pause();
     }
-    return () => {
-      window.speechSynthesis.onvoiceschanged = null;
+    const audio = new Audio(`data:audio/wav;base64,${base64String}`);
+    audioPlayerRef.current = audio;
+
+    audio.play();
+    setChatState('speaking');
+
+    audio.onended = () => {
+      setChatState('idle');
     };
-  }, [isTtsSupported]);
+    audio.onerror = (e) => {
+      console.error("Ошибка воспроизведения аудио:", e);
+      setChatState('idle');
+    };
+  };
 
   // Отправка текстового сообщения
   const handleSend = async (questionText = input) => {
     if (!questionText.trim() || isLoading) return;
-
     const userMessage = { sender: 'user', text: questionText };
     setMessages(prev => [...prev, userMessage]);
-
-    if (questionText === input) {
-      setInput('');
-    }
+    if (questionText === input) { setInput(''); }
 
     setIsLoading(true);
     setChatState('thinking');
@@ -191,12 +184,19 @@ const ChatInterface = ({ mode, toggleColorMode }) => {
       const data = await response.json();
       const botMessage = { sender: 'bot', text: data.answer };
       setMessages(prev => [...prev, botMessage]);
+
+      if (ttsEnabled && data.audio_content) {
+        playAudioFromBase64(data.audio_content);
+      } else {
+        setChatState('idle');
+      }
+
     } catch (error) {
       console.error("Ошибка при отправке сообщения:", error);
       setMessages(prev => [...prev, { sender: 'bot', text: 'Произошла ошибка. Попробуйте снова.' }]);
+      setChatState('idle');
     } finally {
       setIsLoading(false);
-      // TTS useEffect сам переключит состояние в 'speaking' или 'idle'
     }
   };
 
@@ -205,64 +205,14 @@ const ChatInterface = ({ mode, toggleColorMode }) => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
-  // Озвучивание ответов бота (TTS)
-  useEffect(() => {
-    const lastMessage = messages[messages.length - 1];
-
-    if (lastMessage && lastMessage.sender === 'bot' && lastMessage.text) {
-      if (ttsEnabled && isTtsSupported && voices.length > 0) {
-        try {
-          window.speechSynthesis.cancel();
-
-          let cleanText = lastMessage.text
-            .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')
-            .replace(/`/g, '').replace(/\*/g, '').replace(/#/g, '').replace(/_/g, '')
-            .replace(/\//g, ' ');
-
-          const utterance = new SpeechSynthesisUtterance(cleanText);
-          utterance.lang = 'ru-RU';
-          utterance.rate = 0.9;
-          utterance.pitch = 1.0;
-
-          let bestVoice = voices.find(v => v.lang.startsWith('ru') && v.name.includes('Google') && v.name.toLowerCase().includes('male'));
-          if (!bestVoice) bestVoice = voices.find(v => v.lang.startsWith('ru') && v.gender === 'male');
-          if (!bestVoice) bestVoice = voices.find(v => v.lang.startsWith('ru') && v.name.includes('Google'));
-          if (!bestVoice) bestVoice = voices.find(v => v.lang.startsWith('ru'));
-
-          if (bestVoice) {
-            utterance.voice = bestVoice;
-            console.log("Выбран голос для TTS:", bestVoice.name);
-          } else {
-            console.warn("Русские голоса не найдены, используется голос по умолчанию.");
-          }
-
-          utterance.onstart = () => setChatState('speaking');
-          utterance.onend = () => setChatState('idle');
-          utterance.onerror = () => setChatState('idle');
-
-          window.speechSynthesis.speak(utterance);
-        } catch (e) {
-          console.error("Ошибка синтеза речи:", e);
-          setChatState('idle');
-        }
-      } else {
-        // Если TTS выключен, но пришло сообщение, сразу переводим в idle
-        setChatState('idle');
-      }
-    }
-  }, [messages, ttsEnabled, isTtsSupported, voices]);
-
   // Переключатель TTS
   const handleToggleTts = () => {
-    if (!isTtsSupported) {
-      alert('Озвучка не поддерживается в этом браузере.');
-      return;
-    }
     const newValue = !ttsEnabled;
     setTtsEnabled(newValue);
     localStorage.setItem('ttsEnabled', String(newValue));
-    if (!newValue) {
-      try { window.speechSynthesis.cancel(); } catch (e) {}
+    if (!newValue && audioPlayerRef.current) {
+      audioPlayerRef.current.pause();
+      setChatState('idle');
     }
   };
 
@@ -273,16 +223,13 @@ const ChatInterface = ({ mode, toggleColorMode }) => {
       setIsRecording(false);
       return;
     }
-
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       const recorder = new MediaRecorder(stream, { mimeType: 'audio/webm' });
       audioChunksRef.current = [];
-
       recorder.ondataavailable = (event) => {
         if (event.data.size > 0) audioChunksRef.current.push(event.data);
       };
-
       recorder.onstop = async () => {
         setIsLoading(true);
         setChatState('thinking');
@@ -297,21 +244,27 @@ const ChatInterface = ({ mode, toggleColorMode }) => {
           if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
           const data = await response.json();
 
-          const userMessageText = data.transcribed_question || "(Не удалось распознать)";
+          const userMessageText = data.transcribed_question || "(Не удалось распознать аудио)";
           const userMessage = { sender: 'user', text: userMessageText };
           const botMessage = { sender: 'bot', text: data.answer };
 
-          // Добавляем оба сообщения вместе для одного обновления рендера
           setMessages(prev => [...prev, userMessage, botMessage]);
+
+          if (ttsEnabled && data.audio_content) {
+            playAudioFromBase64(data.audio_content);
+          } else {
+            setChatState('idle');
+          }
+
         } catch (err) {
           console.error('Ошибка отправки аудио:', err);
           setMessages(prev => [...prev, { sender: 'bot', text: 'Произошла ошибка при обработке аудио.' }]);
+          setChatState('idle');
         } finally {
           setIsLoading(false);
           stream.getTracks().forEach(track => track.stop());
         }
       };
-
       mediaRecorderRef.current = recorder;
       recorder.start();
       setIsRecording(true);
@@ -344,7 +297,7 @@ const ChatInterface = ({ mode, toggleColorMode }) => {
         <Box sx={{ display: 'flex', width: '100%', maxWidth: 1200, gap: 2, height: '100%' }}>
 
           <Box sx={{ display: { xs: 'none', md: 'flex' }, flexDirection: 'column', alignItems: 'center', justifyContent: 'center', minWidth: 220, maxWidth: 260, height: '100%', p: 2 }}>
-            <AvatarVideo chatState={chatState} />
+            <AvatarVideo chatState={chatState} mode={mode} />
           </Box>
 
           <Box id="messages-scroll" sx={{ flex: 1, overflowY: 'auto', px: { xs: 2, sm: 3, md: 4 }, py: 3 }}>

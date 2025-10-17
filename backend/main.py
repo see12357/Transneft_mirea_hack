@@ -1,6 +1,9 @@
 # -*- coding: utf-8 -*-
 """
 Основной файл FastAPI-приложения для цифрового консультанта ПАО «Транснефть».
+
+Реализует RAG-цепочку, ASR (Whisper) и TTS (Silero) для
+полноценного голосового и текстового взаимодействия.
 """
 
 # Стандартные библиотеки
@@ -9,17 +12,21 @@ import re
 import json
 import time
 import tempfile
+import base64
+import torch
 from contextlib import asynccontextmanager
+from io import BytesIO
 
 # Сторонние библиотеки
 import redis
 import requests
+import torchaudio
 from fastapi import FastAPI, HTTPException, UploadFile, File, Form, Request
 from pydantic import BaseModel
 from fastapi.middleware.cors import CORSMiddleware
 from operator import itemgetter
 
-# Библиотека для распознавания речи
+# Библиотека для распознавания речи (ASR)
 import whisper
 
 # Библиотеки LangChain
@@ -43,6 +50,13 @@ RERANKER_MODEL_NAME = "cross-encoder/ms-marco-MiniLM-L-6-v2"
 WHISPER_MODEL_NAME = "small"
 MODEL_CACHE_PATH = "/root/.cache/huggingface"
 OLLAMA_BASE_URL = f"http://{OLLAMA_HOST}:11434"
+
+# --- Конфигурация Silero TTS ---
+SILERO_MODEL = 'silero_tts'
+SILERO_LANGUAGE = 'ru'
+SILERO_SPEAKER = 'aidar'  # Мужской голос
+SILERO_REPO = 'snakers4/silero-models'
+SAMPLE_RATE = 48000
 
 # --- Инициализация клиентов ---
 redis_client = redis.Redis(host=REDIS_HOST, port=6379, db=0, decode_responses=True)
@@ -86,33 +100,21 @@ def create_prompt_template() -> ChatPromptTemplate:
 
 
 def classify_intent(question: str) -> str:
-    """
-    Простая классификация намерения пользователя для отсечения RAG-цепочки
-    для простых диалоговых фраз.
-    """
+    """Классифицирует намерение пользователя для отсечения RAG-цепочки."""
     greetings = ["привет", "здравствуй", "добрый день", "добрый вечер", "доброе утро", "hello", "hi"]
     farewells = ["пока", "до свидания", "всего доброго", "goodbye", "bye"]
     thanks = ["спасибо", "благодарю", "thx", "thank you", "отлично спасибо"]
-
     normalized_question = ''.join(c for c in question.lower() if c.isalnum() or c.isspace()).strip()
-
-    if normalized_question in greetings:
-        return "GREETING"
-    if normalized_question in farewells:
-        return "FAREWELL"
-    if normalized_question in thanks:
-        return "THANKS"
-
+    if normalized_question in greetings: return "GREETING"
+    if normalized_question in farewells: return "FAREWELL"
+    if normalized_question in thanks: return "THANKS"
     return "QUESTION"
 
 
 def sanitize_input(question: str) -> str:
-    """Проверяет ввод на наличие ключевых слов для промпт-инъекций и логирует их."""
-    injection_patterns = [
-        r"игнорируй.*инструкции", r"забудь все", r"act as", r"ты теперь",
-        r"you are now", r"print your instructions", r"ответ от имени",
-        r"ignore.*instructions",
-    ]
+    """Проверяет ввод на ключевые слова для промпт-инъекций."""
+    injection_patterns = [r"игнорируй.*инструкции", r"забудь все", r"act as", r"ты теперь", r"you are now",
+                          r"print your instructions", r"ответ от имени", r"ignore.*instructions"]
     for pattern in injection_patterns:
         if re.search(pattern, question, re.IGNORECASE):
             print(f"!!! ОБНАРУЖЕНА ПОТЕНЦИАЛЬНАЯ ПРОМПТ-ИНЪЕКЦИЯ: '{question}'")
@@ -120,15 +122,34 @@ def sanitize_input(question: str) -> str:
     return question
 
 
+def generate_tts_audio(text: str, model, speaker: str, sample_rate: int) -> str:
+    """Генерирует аудио из текста с помощью Silero и возвращает его в Base64."""
+    if not text:
+        return ""
+    print(f"Генерация TTS для текста: '{text[:50]}...'")
+    try:
+        clean_text = re.sub(r'\[.*?\]\(.*?\)', '', text)
+        clean_text = re.sub(r'[\*\_`#\/]', ' ', clean_text).strip()
+
+        audio_tensor = model.apply_tts(text=clean_text, speaker=speaker, sample_rate=sample_rate)
+        buffer = BytesIO()
+        torchaudio.save(buffer, audio_tensor.unsqueeze(0), sample_rate, format="wav")
+        buffer.seek(0)
+        audio_base64 = base64.b64encode(buffer.read()).decode('utf-8')
+        return audio_base64
+    except Exception as e:
+        print(f"ОШИБКА при генерации TTS: {e}")
+        return ""
+
+
 def ensure_ollama_model(model_name: str, base_url: str) -> bool:
-    """Проверяет наличие модели в Ollama и инициирует скачивание при необходимости."""
+    """Проверяет наличие модели в Ollama."""
     print(f"Проверка наличия модели '{model_name}' в Ollama...")
     try:
         response = requests.post(f"{base_url}/api/pull", json={"name": model_name, "stream": False}, timeout=3600)
         response.raise_for_status()
         response_json = response.json()
-        if isinstance(response_json, dict) and "error" in response_json:
-            raise Exception(response_json['error'])
+        if isinstance(response_json, dict) and "error" in response_json: raise Exception(response_json['error'])
         print(f"Модель '{model_name}' успешно загружена или уже была доступна.")
         return True
     except requests.exceptions.RequestException as e:
@@ -138,51 +159,42 @@ def ensure_ollama_model(model_name: str, base_url: str) -> bool:
     return False
 
 
-# --- Lifespan Manager для инициализации ресурсов ---
-
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Управляет жизненным циклом приложения, загружая модели при старте."""
     print("Сервер запускается... Подготовка зависимостей...")
 
-    print("Очистка истории чатов в Redis...")
-    try:
-        redis_client.flushdb()
-        print("Очистка завершена: Redis не содержит предыдущих сессий.")
-    except Exception as e:
-        print(f"Не удалось очистить Redis: {e}")
-
     ollama_ready = False
     for i in range(20):
         if ensure_ollama_model(OLLAMA_MODEL_NAME, OLLAMA_BASE_URL):
-            ollama_ready = True
+            ollama_ready = True;
             break
-        print(f"Попытка {i + 1}/20. Ollama еще не готова, ждем 15 секунд...")
+        print(f"Попытка {i + 1}/20. Ollama еще не готова, ждем 15 секунд...");
         time.sleep(15)
-    if not ollama_ready:
-        raise RuntimeError("Не удалось подготовить модель в Ollama.")
+    if not ollama_ready: raise RuntimeError("Не удалось подготовить модель в Ollama.")
 
-    print("Загрузка моделей Embeddings, Reranker и Whisper...")
-    app.state.embedding_model = HuggingFaceEmbeddings(
-        model_name=EMBEDDING_MODEL_NAME, model_kwargs={'device': 'cpu'}, cache_folder=MODEL_CACHE_PATH
-    )
-    reranker_model = HuggingFaceCrossEncoder(
-        model_name=RERANKER_MODEL_NAME, model_kwargs={'device': 'cpu'}
-    )
+    print("Загрузка AI-моделей...")
+    app.state.embedding_model = HuggingFaceEmbeddings(model_name=EMBEDDING_MODEL_NAME, model_kwargs={'device': 'cpu'},
+                                                      cache_folder=MODEL_CACHE_PATH)
+    reranker_model = HuggingFaceCrossEncoder(model_name=RERANKER_MODEL_NAME, model_kwargs={'device': 'cpu'})
 
     print(f"Загрузка модели Whisper '{WHISPER_MODEL_NAME}'...")
     app.state.stt_model = whisper.load_model(WHISPER_MODEL_NAME, device="cpu")
+
+    print("Загрузка модели Silero TTS...")
+    torch.hub.set_dir(MODEL_CACHE_PATH)
+    device = torch.device('cpu')
+    tts_model, _ = torch.hub.load(repo_or_dir=SILERO_REPO, model=SILERO_MODEL, language=SILERO_LANGUAGE,
+                                  speaker='v3_1_ru')
+    tts_model.to(device)
+    app.state.tts_model = tts_model
     print("AI-модели успешно загружены.")
 
     print(f"Загрузка векторного хранилища из '{FAISS_INDEX_PATH}'...")
-    vector_store = FAISS.load_local(
-        FAISS_INDEX_PATH, app.state.embedding_model, allow_dangerous_deserialization=True
-    )
+    vector_store = FAISS.load_local(FAISS_INDEX_PATH, app.state.embedding_model, allow_dangerous_deserialization=True)
     base_retriever = vector_store.as_retriever(search_kwargs={'k': 10})
     compressor = CrossEncoderReranker(model=reranker_model, top_n=4)
-    compression_retriever = ContextualCompressionRetriever(
-        base_compressor=compressor, base_retriever=base_retriever
-    )
+    compression_retriever = ContextualCompressionRetriever(base_compressor=compressor, base_retriever=base_retriever)
     print("Векторное хранилище и ретривер успешно настроены.")
 
     print("Инициализация RAG-цепочки...")
@@ -192,29 +204,21 @@ async def lifespan(app: FastAPI):
     def format_docs(docs):
         return "\n\n".join(doc.page_content for doc in docs)
 
-    app.state.rag_chain = (
-            {"context": itemgetter("question") | compression_retriever | format_docs,
-             "question": itemgetter("question"),
-             "chat_history": itemgetter("chat_history")}
-            | prompt | llm | StrOutputParser()
-    )
+    app.state.rag_chain = ({"context": itemgetter("question") | compression_retriever | format_docs,
+                            "question": itemgetter("question"),
+                            "chat_history": itemgetter("chat_history")} | prompt | llm | StrOutputParser())
     print("RAG-цепочка успешно создана.")
 
-    print("Сервер готов к работе.")
-    yield
+    print("Сервер готов к работе.");
+    yield;
     print("Сервер останавливается.")
 
 
-# --- Инициализация FastAPI приложения ---
-
+# --- Инициализация FastAPI ---
 app = FastAPI(title="Transneft AI Assistant API", lifespan=lifespan)
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["http://localhost", "http://localhost:3000", "http://localhost:5173", "http://localhost:80"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+app.add_middleware(CORSMiddleware, allow_origins=["http://localhost", "http://localhost:3000", "http://localhost:5173",
+                                                  "http://localhost:80"], allow_credentials=True, allow_methods=["*"],
+                   allow_headers=["*"])
 
 
 class ChatRequest(BaseModel):
@@ -222,13 +226,8 @@ class ChatRequest(BaseModel):
     session_id: str
 
 
-# --- Основная логика обработки запросов ---
-
-async def _process_chat_logic(session_id: str, question: str, rag_chain: object) -> dict:
-    """
-    Центральная функция для обработки запроса: классифицирует намерение,
-    вызывает RAG или возвращает заготовленный ответ, обновляет историю.
-    """
+# --- Основная логика ---
+async def _process_chat_logic(session_id: str, question: str, rag_chain: object, tts_model: object) -> dict:
     sanitized_question = sanitize_input(question)
     intent = classify_intent(sanitized_question)
     response_text = ""
@@ -239,23 +238,20 @@ async def _process_chat_logic(session_id: str, question: str, rag_chain: object)
         response_text = "Всего доброго! Если у вас появятся еще вопросы, обращайтесь."
     elif intent == "THANKS":
         response_text = "Рад был помочь! Обращайтесь, если возникнут новые вопросы."
-    else:  # intent == "QUESTION"
+    else:
         try:
             history_json = redis_client.get(session_id)
             chat_history_list = json.loads(history_json) if history_json else []
-            formatted_chat_history = "\n".join(
-                [f"{msg['sender']}: {msg['text']}" for msg in chat_history_list[-4:]]
-            )
+            formatted_chat_history = "\n".join([f"{msg['sender']}: {msg['text']}" for msg in chat_history_list[-4:]])
             print("Вызов RAG-цепочки...")
-            response_text = rag_chain.invoke({
-                "question": sanitized_question,
-                "chat_history": formatted_chat_history
-            })
+            response_text = rag_chain.invoke({"question": sanitized_question, "chat_history": formatted_chat_history})
         except Exception as e:
             print(f"ОШИБКА при выполнении RAG-цепочки: {e}")
             raise HTTPException(status_code=500, detail=f"Внутренняя ошибка при генерации ответа: {e}")
 
     print(f"Сформирован ответ: {response_text}")
+    audio_content = generate_tts_audio(text=response_text, model=tts_model, speaker=SILERO_SPEAKER,
+                                       sample_rate=SAMPLE_RATE)
 
     try:
         history_json = redis_client.get(session_id)
@@ -266,11 +262,10 @@ async def _process_chat_logic(session_id: str, question: str, rag_chain: object)
     except Exception as e:
         print(f"ОШИБКА при сохранении истории в Redis: {e}")
 
-    return {"answer": response_text, "question_text": question}
+    return {"answer": response_text, "question_text": question, "audio_content": audio_content}
 
 
 # --- API Эндпоинты ---
-
 @app.get("/api/chat/history/{session_id}", summary="Получить историю чата")
 async def get_chat_history(session_id: str):
     history_json = redis_client.get(session_id)
@@ -284,12 +279,13 @@ async def get_answer_text(req_body: ChatRequest, request: Request):
     print(f"Вопрос: {req_body.question}")
 
     rag_chain = request.app.state.rag_chain
-    if not rag_chain:
+    tts_model = request.app.state.tts_model
+    if not rag_chain or not tts_model:
         raise HTTPException(status_code=503, detail="Сервер еще не готов.")
 
-    response = await _process_chat_logic(req_body.session_id, req_body.question, rag_chain)
+    response = await _process_chat_logic(req_body.session_id, req_body.question, rag_chain, tts_model)
     print("=" * 50)
-    return {"answer": response["answer"]}
+    return response
 
 
 @app.post("/api/chat/audio", summary="Получить ответ от ассистента (аудио)")
@@ -299,7 +295,8 @@ async def get_answer_audio(request: Request, session_id: str = Form(...), audio_
 
     rag_chain = request.app.state.rag_chain
     stt_model = request.app.state.stt_model
-    if not rag_chain or not stt_model:
+    tts_model = request.app.state.tts_model
+    if not all([rag_chain, stt_model, tts_model]):
         raise HTTPException(status_code=503, detail="Сервер еще не готов.")
 
     audio_bytes = await audio_file.read()
@@ -310,19 +307,20 @@ async def get_answer_audio(request: Request, session_id: str = Form(...), audio_
         with tempfile.NamedTemporaryFile(delete=True, suffix=".webm") as temp_audio_file:
             temp_audio_file.write(audio_bytes)
             temp_audio_file.flush()
-
             print(f"Распознавание речи из файла: {temp_audio_file.name}...")
             result = stt_model.transcribe(temp_audio_file.name, language="ru")
             question_text = result["text"].strip()
 
         print(f"Текст распознан: '{question_text}'")
         if not question_text:
-            return {"answer": "Не удалось распознать аудио. Попробуйте еще раз.", "transcribed_question": ""}
+            response_text = "Не удалось распознать аудио. Попробуйте еще раз."
+            audio_content = generate_tts_audio(response_text, tts_model, SILERO_SPEAKER, SAMPLE_RATE)
+            return {"answer": response_text, "transcribed_question": "", "audio_content": audio_content}
 
     except Exception as e:
         print(f"ОШИБКА при распознавании речи: {e}")
         raise HTTPException(status_code=500, detail=f"Ошибка в модели распознавания речи: {e}")
 
-    response = await _process_chat_logic(session_id, question_text, rag_chain)
+    response = await _process_chat_logic(session_id, question_text, rag_chain, tts_model)
     print("=" * 50)
-    return {"answer": response["answer"], "transcribed_question": response["question_text"]}
+    return response

@@ -48,7 +48,7 @@ backend/env/
 backend/models/
 
 # Сгенерированный индекс FAISS
-backend/data/faiss_index_*/
+
 
 
 # Локальные переменные окружения

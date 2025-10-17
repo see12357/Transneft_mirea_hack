@@ -34,6 +34,7 @@ services:
       # --- ВОТ ГЛАВНОЕ ИСПРАВЛЕНИЕ ---
       # Передаем имя сервиса 'ollama' в контейнер backend
       - OLLAMA_HOST=ollama
+      - XDG_CACHE_HOME=/root/.cache/huggingface
     depends_on:
       - redis
       - ollama
