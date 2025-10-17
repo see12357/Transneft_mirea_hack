@@ -35,9 +35,5 @@ transformers
 ffmpeg
 scipy
 numpy
-nemo_toolkit[all]
-hydra-core
-omegaconf
-webdataset
-tensorboard
-pytorch-lightning
+nemo_toolkit[asr]
+soundfile
