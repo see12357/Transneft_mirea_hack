@@ -14,46 +14,53 @@ import {
 } from '@mui/material';
 
 // --- КОМПОНЕНТ 1: АНИМИРОВАННЫЙ АВАТАР С ПОДДЕРЖКОЙ ТЕМ ---
+// Этот компонент отвечает за визуализацию аватара в зависимости от его состояния.
 const AvatarVideo = ({ chatState, mode }) => {
   const videoRef = useRef(null);
+  // Состояние для хранения текущего видео и флага зацикливания
   const [currentVideo, setCurrentVideo] = useState({ src: `/videos/greeting_${mode}.mp4`, loop: false });
 
+  // Эффект для смены видео в зависимости от состояния чата (chatState) или темы (mode)
   useEffect(() => {
     let baseName = 'idle';
     let newLoop = true;
 
     switch (chatState) {
-      case 'greeting':
+      case 'greeting': // Первоначальное приветствие
         baseName = 'greeting';
         newLoop = false;
         break;
-      case 'thinking':
-        baseName = 'talking';
+      case 'thinking': // Ассистент "думает" (ждем ответ от сервера)
+        baseName = 'talking'; // Используем talking как универсальную анимацию ожидания
         newLoop = true;
         break;
-      case 'speaking':
+      case 'speaking': // Ассистент говорит (проигрывается TTS аудио)
         baseName = 'speaking';
         newLoop = false;
         break;
-      case 'idle':
+      case 'idle': // Состояние покоя/ожидания ввода
       default:
-        baseName = 'talking';
+        baseName = 'talking'; // Используем talking как стандартную анимацию бездействия
         newLoop = true;
         break;
     }
 
     const newSrc = `/videos/${baseName}_${mode}.mp4`;
 
+    // Меняем видео, только если источник изменился
     if (currentVideo.src !== newSrc) {
       setCurrentVideo({ src: newSrc, loop: newLoop });
     }
   }, [chatState, mode, currentVideo.src]);
 
+  // Эффект для обработки окончания не-зацикленных видео
   useEffect(() => {
     const videoElement = videoRef.current;
+    // Если видео нет или оно должно быть зациклено, ничего не делаем
     if (!videoElement || currentVideo.loop) return;
 
     const handleVideoEnd = () => {
+      // Когда видео "приветствия" или "говорения" заканчивается, переключаемся на зацикленное видео "ожидания"
       setCurrentVideo({ src: `/videos/talking_${mode}.mp4`, loop: true });
     };
 
@@ -80,7 +87,7 @@ const AvatarVideo = ({ chatState, mode }) => {
     >
       <video
         ref={videoRef}
-        key={currentVideo.src}
+        key={currentVideo.src} // Ключ для принудительного ререндера при смене src
         width="100%"
         height="auto"
         autoPlay
@@ -99,7 +106,9 @@ const AvatarVideo = ({ chatState, mode }) => {
   );
 };
 
-// --- КОМПОНЕНТ 2: ОСНОВНОЙ ИНТЕРФЕЙС ЧАТА ---
+
+// --- ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ---
+// Получение или создание уникального ID сессии
 const getSessionId = () => {
   let sessionId = localStorage.getItem('chatSessionId');
   if (!sessionId) {
@@ -109,6 +118,17 @@ const getSessionId = () => {
   return sessionId;
 };
 
+// Форматирование времени для таймера записи
+const formatTime = (seconds) => {
+  const minutes = Math.floor(seconds / 60);
+  const remainingSeconds = seconds % 60;
+  const formattedMinutes = String(minutes).padStart(2, '0');
+  const formattedSeconds = String(remainingSeconds).padStart(2, '0');
+  return `${formattedMinutes}:${formattedSeconds}`;
+};
+
+
+// --- КОМПОНЕНТ 2: ОСНОВНОЙ ИНТЕРФЕЙС ЧАТА ---
 const ChatInterface = ({ mode, toggleColorMode }) => {
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState('');
@@ -116,13 +136,15 @@ const ChatInterface = ({ mode, toggleColorMode }) => {
   const [sessionId] = useState(getSessionId());
   const messagesEndRef = useRef(null);
   const [isRecording, setIsRecording] = useState(false);
+  const [recordingTime, setRecordingTime] = useState(0); // Состояние для таймера
   const mediaRecorderRef = useRef(null);
   const audioChunksRef = useRef([]);
+  const recordingTimerRef = useRef(null); // Реф для интервала таймера
   const [ttsEnabled, setTtsEnabled] = useState(() => localStorage.getItem('ttsEnabled') === 'true');
   const [chatState, setChatState] = useState('greeting');
-  const audioPlayerRef = useRef(null); // Реф для управления аудио-плеером
+  const audioPlayerRef = useRef(null);
 
-  // Загрузка истории чата
+  // Загрузка истории чата при первом рендере
   useEffect(() => {
     const fetchHistory = async () => {
       setIsLoading(true);
@@ -131,6 +153,7 @@ const ChatInterface = ({ mode, toggleColorMode }) => {
         if (response.ok) {
           const data = await response.json();
           setMessages(data);
+          // Если история есть, переходим в состояние ожидания
           if (data.length > 0) {
             setChatState('idle');
           }
@@ -144,7 +167,7 @@ const ChatInterface = ({ mode, toggleColorMode }) => {
     fetchHistory();
   }, [sessionId]);
 
-  // --- НОВАЯ ФУНКЦИЯ: Проигрывание аудио из Base64 ---
+  // Проигрывание аудио из Base64 и управление состоянием аватара
   const playAudioFromBase64 = (base64String) => {
     if (audioPlayerRef.current) {
       audioPlayerRef.current.pause();
@@ -153,14 +176,14 @@ const ChatInterface = ({ mode, toggleColorMode }) => {
     audioPlayerRef.current = audio;
 
     audio.play();
-    setChatState('speaking');
+    setChatState('speaking'); // Аватар начинает "говорить"
 
     audio.onended = () => {
-      setChatState('idle');
+      setChatState('idle'); // Аватар переходит в режим ожидания
     };
     audio.onerror = (e) => {
       console.error("Ошибка воспроизведения аудио:", e);
-      setChatState('idle');
+      setChatState('idle'); // В случае ошибки тоже возвращаемся в режим ожидания
     };
   };
 
@@ -172,7 +195,7 @@ const ChatInterface = ({ mode, toggleColorMode }) => {
     if (questionText === input) { setInput(''); }
 
     setIsLoading(true);
-    setChatState('thinking');
+    setChatState('thinking'); // Аватар "думает"
 
     try {
       const response = await fetch('/api/chat', {
@@ -188,9 +211,8 @@ const ChatInterface = ({ mode, toggleColorMode }) => {
       if (ttsEnabled && data.audio_content) {
         playAudioFromBase64(data.audio_content);
       } else {
-        setChatState('idle');
+        setChatState('idle'); // Если TTS выключен, сразу в режим ожидания
       }
-
     } catch (error) {
       console.error("Ошибка при отправке сообщения:", error);
       setMessages(prev => [...prev, { sender: 'bot', text: 'Произошла ошибка. Попробуйте снова.' }]);
@@ -200,7 +222,7 @@ const ChatInterface = ({ mode, toggleColorMode }) => {
     }
   };
 
-  // Автоскролл
+  // Автоскролл к последнему сообщению
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
@@ -210,29 +232,34 @@ const ChatInterface = ({ mode, toggleColorMode }) => {
     const newValue = !ttsEnabled;
     setTtsEnabled(newValue);
     localStorage.setItem('ttsEnabled', String(newValue));
+    // Если выключаем TTS во время проигрывания, останавливаем аудио
     if (!newValue && audioPlayerRef.current) {
       audioPlayerRef.current.pause();
       setChatState('idle');
     }
   };
 
-  // Запись и отправка аудио (ASR)
+  // Запись и отправка аудио
   const handleRecordToggle = async () => {
     if (isRecording) {
       mediaRecorderRef.current?.stop();
       setIsRecording(false);
+      clearInterval(recordingTimerRef.current); // Останавливаем таймер
+      setRecordingTime(0);
       return;
     }
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       const recorder = new MediaRecorder(stream, { mimeType: 'audio/webm' });
       audioChunksRef.current = [];
+
       recorder.ondataavailable = (event) => {
         if (event.data.size > 0) audioChunksRef.current.push(event.data);
       };
+
       recorder.onstop = async () => {
         setIsLoading(true);
-        setChatState('thinking');
+        setChatState('thinking'); // Аватар "думает"
 
         const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
         const formData = new FormData();
@@ -244,7 +271,8 @@ const ChatInterface = ({ mode, toggleColorMode }) => {
           if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
           const data = await response.json();
 
-          const userMessageText = data.transcribed_question || "(Не удалось распознать аудио)";
+          // --- ИСПРАВЛЕНИЕ: Используем 'question_text' вместо 'transcribed_question' ---
+          const userMessageText = data.question_text || "(Не удалось распознать аудио)";
           const userMessage = { sender: 'user', text: userMessageText };
           const botMessage = { sender: 'bot', text: data.answer };
 
@@ -265,9 +293,15 @@ const ChatInterface = ({ mode, toggleColorMode }) => {
           stream.getTracks().forEach(track => track.stop());
         }
       };
+
       mediaRecorderRef.current = recorder;
       recorder.start();
       setIsRecording(true);
+      // Запускаем таймер
+      recordingTimerRef.current = setInterval(() => {
+        setRecordingTime(prevTime => prevTime + 1);
+      }, 1000);
+
     } catch (err) {
       console.error('Доступ к микрофону отклонен:', err);
       alert('Не удалось получить доступ к микрофону. Проверьте разрешения в настройках браузера.');
@@ -295,14 +329,11 @@ const ChatInterface = ({ mode, toggleColorMode }) => {
 
       <Box sx={{ flex: 1, display: 'flex', justifyContent: 'center', overflow: 'hidden' }}>
         <Box sx={{ display: 'flex', width: '100%', maxWidth: 1200, gap: 2, height: '100%' }}>
-
           <Box sx={{ display: { xs: 'none', md: 'flex' }, flexDirection: 'column', alignItems: 'center', justifyContent: 'center', minWidth: 220, maxWidth: 260, height: '100%', p: 2 }}>
             <AvatarVideo chatState={chatState} mode={mode} />
           </Box>
-
           <Box id="messages-scroll" sx={{ flex: 1, overflowY: 'auto', px: { xs: 2, sm: 3, md: 4 }, py: 3 }}>
             <Box display="flex" flexDirection="column" gap={1.5}>
-
               {messages.map((msg, index) => {
                 const isUser = msg.sender === 'user';
                 return (
@@ -322,7 +353,6 @@ const ChatInterface = ({ mode, toggleColorMode }) => {
                   </Box>
                 );
               })}
-
               {isLoading && (
                 <Box display="flex" justifyContent="flex-start" sx={{ mb: 1 }}>
                   <Paper elevation={1} sx={{ px: 2.5, py: 1.5, borderRadius: 3, bgcolor: 'background.paper', boxShadow: '0 1px 3px rgba(0,0,0,0.05)' }}>
@@ -358,19 +388,36 @@ const ChatInterface = ({ mode, toggleColorMode }) => {
               {ttsEnabled ? <Volume2 size={20} /> : <VolumeX size={20} />}
             </IconButton>
 
-            <InputBase
-              placeholder="Задайте ваш вопрос..."
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              disabled={isLoading}
-              onKeyPress={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSend(); } }}
-              sx={{ ml: 1, flex: 1, py: 1.5, fontSize: '0.95rem' }}
-              multiline
-              maxRows={5}
-            />
-            <IconButton onClick={handleRecordToggle} color={isRecording ? 'error' : 'default'} aria-label="record voice" disabled={isLoading} sx={{
+            {/* --- УЛУЧШЕНИЕ: Динамическое поле ввода для записи голоса --- */}
+            {isRecording ? (
+              <Box sx={{ display: 'flex', alignItems: 'center', flex: 1, ml: 1, py: 1.5 }}>
+                <Box sx={{ width: 8, height: 8, borderRadius: '50%', bgcolor: 'error.main',
+                  animation: 'pulse 1.5s infinite',
+                  '@keyframes pulse': { '0%': { opacity: 1 }, '50%': { opacity: 0.4 }, '100%': { opacity: 1 } }
+                }}/>
+                <Typography sx={{ ml: 1.5, color: 'text.secondary', fontWeight: 500 }}>
+                  Запись...
+                </Typography>
+                <Typography sx={{ ml: 'auto', color: 'text.secondary', fontWeight: 500 }}>
+                  {formatTime(recordingTime)}
+                </Typography>
+              </Box>
+            ) : (
+              <InputBase
+                placeholder="Задайте ваш вопрос..."
+                value={input}
+                onChange={(e) => setInput(e.target.value)}
+                disabled={isLoading}
+                onKeyPress={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSend(); } }}
+                sx={{ ml: 1, flex: 1, py: 1.5, fontSize: '0.95rem' }}
+                multiline
+                maxRows={5}
+              />
+            )}
+
+            <IconButton onClick={handleRecordToggle} aria-label="record voice" disabled={isLoading} sx={{
                 mr: 1, p: 1.5, borderRadius: 2,
-                bgcolor: isRecording ? 'error.main' : 'action.hover',
+                bgcolor: isRecording ? 'error.light' : 'action.hover',
                 color: isRecording ? 'error.contrastText' : 'text.secondary',
                 '&:hover': { bgcolor: isRecording ? 'error.dark' : 'action.selected' }
               }}>

@@ -31,8 +31,7 @@ if not os.path.exists(CACHE_DIR):
 
 print(f"Начинаю загрузку модели '{MODEL_NAME}' в папку '{CACHE_DIR}'...")
 
-# Инициализируем модель, указав папку для кеширования
-# Это запустит процесс скачивания
+
 HuggingFaceEmbeddings(
     model_name=MODEL_NAME,
     cache_folder=CACHE_DIR

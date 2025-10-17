@@ -2,7 +2,7 @@
 """
 Основной файл FastAPI-приложения для цифрового консультанта ПАО «Транснефть».
 
-Реализует RAG-цепочку, ASR (Whisper) и TTS (Silero) для
+Реализует RAG-цепочку, ASR (Silero STT) и TTS (Silero) для
 полноценного голосового и текстового взаимодействия.
 """
 
@@ -14,20 +14,18 @@ import time
 import tempfile
 import base64
 import torch
+import numpy as np
 from contextlib import asynccontextmanager
 from io import BytesIO
+from scipy.io.wavfile import write as write_wav  # <-- ИЗМЕНЕНИЕ: Импорт для сохранения WAV
 
 # Сторонние библиотеки
 import redis
 import requests
-import torchaudio
 from fastapi import FastAPI, HTTPException, UploadFile, File, Form, Request
 from pydantic import BaseModel
 from fastapi.middleware.cors import CORSMiddleware
 from operator import itemgetter
-
-# Библиотека для распознавания речи (ASR)
-import whisper
 
 # Библиотеки LangChain
 from langchain_community.vectorstores import FAISS
@@ -47,16 +45,19 @@ FAISS_INDEX_PATH = "data/faiss_index_gemma"
 OLLAMA_MODEL_NAME = "gemma3:4b-it-qat"
 EMBEDDING_MODEL_NAME = "Qwen/Qwen3-Embedding-0.6B"
 RERANKER_MODEL_NAME = "cross-encoder/ms-marco-MiniLM-L-6-v2"
-WHISPER_MODEL_NAME = "small"
 MODEL_CACHE_PATH = "/root/.cache/huggingface"
 OLLAMA_BASE_URL = f"http://{OLLAMA_HOST}:11434"
 
-# --- Конфигурация Silero TTS ---
-SILERO_MODEL = 'silero_tts'
-SILERO_LANGUAGE = 'ru'
-SILERO_SPEAKER = 'aidar'  # Мужской голос
+# --- Конфигурация Silero ---
 SILERO_REPO = 'snakers4/silero-models'
-SAMPLE_RATE = 48000
+# TTS (Text-to-Speech)
+SILERO_TTS_MODEL = 'silero_tts'
+SILERO_LANGUAGE = 'ru'
+SILERO_SPEAKER = 'aidar'  # Мягкий мужской голос
+SAMPLE_RATE = 48000  # Для TTS
+# STT (Speech-to-Text)
+SILERO_STT_MODEL = 'silero_stt'
+STT_LANGUAGE = 'ru'
 
 # --- Инициализация клиентов ---
 redis_client = redis.Redis(host=REDIS_HOST, port=6379, db=0, decode_responses=True)
@@ -132,9 +133,16 @@ def generate_tts_audio(text: str, model, speaker: str, sample_rate: int) -> str:
         clean_text = re.sub(r'[\*\_`#\/]', ' ', clean_text).strip()
 
         audio_tensor = model.apply_tts(text=clean_text, speaker=speaker, sample_rate=sample_rate)
+
+        # --- ИЗМЕНЕНИЕ: Используем scipy вместо torchaudio ---
+        # Преобразуем тензор в numpy массив и масштабируем для 16-bit WAV
+        audio_numpy = (audio_tensor.numpy() * 32767).astype(np.int16)
+
         buffer = BytesIO()
-        torchaudio.save(buffer, audio_tensor.unsqueeze(0), sample_rate, format="wav")
+        write_wav(buffer, sample_rate, audio_numpy)
         buffer.seek(0)
+        # --- КОНЕЦ ИЗМЕНЕНИЯ ---
+
         audio_base64 = base64.b64encode(buffer.read()).decode('utf-8')
         return audio_base64
     except Exception as e:
@@ -178,17 +186,30 @@ async def lifespan(app: FastAPI):
                                                       cache_folder=MODEL_CACHE_PATH)
     reranker_model = HuggingFaceCrossEncoder(model_name=RERANKER_MODEL_NAME, model_kwargs={'device': 'cpu'})
 
-    print(f"Загрузка модели Whisper '{WHISPER_MODEL_NAME}'...")
-    app.state.stt_model = whisper.load_model(WHISPER_MODEL_NAME, device="cpu")
-
-    print("Загрузка модели Silero TTS...")
+    # --- ИЗМЕНЕНИЕ: Загрузка Silero STT вместо Whisper ---
+    print("Загрузка моделей Silero...")
     torch.hub.set_dir(MODEL_CACHE_PATH)
     device = torch.device('cpu')
-    tts_model, _ = torch.hub.load(repo_or_dir=SILERO_REPO, model=SILERO_MODEL, language=SILERO_LANGUAGE,
+
+    # Загрузка модели Silero TTS (синтез речи)
+    tts_model, _ = torch.hub.load(repo_or_dir=SILERO_REPO, model=SILERO_TTS_MODEL, language=SILERO_LANGUAGE,
                                   speaker='v3_1_ru')
     tts_model.to(device)
     app.state.tts_model = tts_model
+
+    # Загрузка модели Silero STT (распознавание речи)
+    stt_model, decoder, utils = torch.hub.load(repo_or_dir=SILERO_REPO,
+                                               model=SILERO_STT_MODEL,
+                                               language=STT_LANGUAGE,
+                                               device=device)
+    app.state.stt_model = stt_model
+    app.state.stt_decoder = decoder
+    # Сохраняем утилиты для последующего использования
+    (app.state.read_batch, app.state.split_into_chunks,
+     app.state.read_audio, app.state.prepare_model_input) = utils
+
     print("AI-модели успешно загружены.")
+    # --- КОНЕЦ ИЗМЕНЕНИЯ ---
 
     print(f"Загрузка векторного хранилища из '{FAISS_INDEX_PATH}'...")
     vector_store = FAISS.load_local(FAISS_INDEX_PATH, app.state.embedding_model, allow_dangerous_deserialization=True)
@@ -293,10 +314,16 @@ async def get_answer_audio(request: Request, session_id: str = Form(...), audio_
     print("\n" + "=" * 50)
     print(f"ПОЛУЧЕН АУДИО ЗАПРОС. ID сессии: {session_id}")
 
+    # --- ИЗМЕНЕНИЕ: Получаем модели и утилиты Silero STT ---
     rag_chain = request.app.state.rag_chain
-    stt_model = request.app.state.stt_model
     tts_model = request.app.state.tts_model
-    if not all([rag_chain, stt_model, tts_model]):
+    stt_model = request.app.state.stt_model
+    stt_decoder = request.app.state.stt_decoder
+    read_audio = request.app.state.read_audio
+    prepare_model_input = request.app.state.prepare_model_input
+    # --- КОНЕЦ ИЗМЕНЕНИЯ ---
+
+    if not all([rag_chain, stt_model, tts_model, stt_decoder, read_audio, prepare_model_input]):
         raise HTTPException(status_code=503, detail="Сервер еще не готов.")
 
     audio_bytes = await audio_file.read()
@@ -304,12 +331,22 @@ async def get_answer_audio(request: Request, session_id: str = Form(...), audio_
         raise HTTPException(status_code=400, detail="Аудиофайл пуст.")
 
     try:
-        with tempfile.NamedTemporaryFile(delete=True, suffix=".webm") as temp_audio_file:
+        # --- ИЗМЕНЕНИЕ: Логика распознавания с помощью Silero STT ---
+        with tempfile.NamedTemporaryFile(delete=True, suffix=".wav") as temp_audio_file:
             temp_audio_file.write(audio_bytes)
             temp_audio_file.flush()
+
             print(f"Распознавание речи из файла: {temp_audio_file.name}...")
-            result = stt_model.transcribe(temp_audio_file.name, language="ru")
-            question_text = result["text"].strip()
+
+            # 1. Читаем аудиофайл с помощью утилиты Silero
+            wav_input = read_audio(temp_audio_file.name)
+            # 2. Готовим входные данные для модели
+            input_features = prepare_model_input(wav_input, device=torch.device('cpu'))
+            # 3. Прогоняем через модель
+            output = stt_model(input_features)
+            # 4. Декодируем результат в текст
+            question_text = stt_decoder(output[0].cpu()).strip()
+        # --- КОНЕЦ ИЗМЕНЕНИЯ ---
 
         print(f"Текст распознан: '{question_text}'")
         if not question_text:

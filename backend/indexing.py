@@ -1,8 +1,6 @@
 import docx
 from langchain_community.vectorstores import FAISS
 from langchain_text_splitters import RecursiveCharacterTextSplitter
-# Убираем 'from sentence_transformers import SentenceTransformer'
-# Вместо него импортируем специальный класс-адаптер от LangChain
 from langchain_community.embeddings import HuggingFaceEmbeddings # <-- ИЗМЕНЕНИЕ 1
 
 # --- НАСТРОЙКИ ---

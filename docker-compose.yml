@@ -7,7 +7,7 @@ services:
     image: redis:alpine
     container_name: transneft-redis
     volumes:
-      - redis_data:/data # Добавил том для сохранения данных Redis
+      - redis_data:/data
     restart: unless-stopped
 
   ollama:
@@ -16,32 +16,29 @@ services:
     volumes:
       - ollama_data:/root/.ollama
     ports:
-      - "11434:11434" # Оставляем для отладки
+      - "11434:11434"
     restart: unless-stopped
 
   backend:
     build:
-      context: ./backend # Контекст сборки - папка backend
+      context: ./backend
       args:
         - HF_TOKEN=${HF_TOKEN}
     container_name: transneft-backend
-    ports: # Добавил порт для удобства прямого тестирования API
+    ports:
       - "8000:8000"
-    volumes: # Добавил том для кэша моделей, чтобы не скачивать их каждый раз
+    volumes:
       - models_cache:/root/.cache/huggingface
     environment:
       - REDIS_HOST=redis
-      # --- ВОТ ГЛАВНОЕ ИСПРАВЛЕНИЕ ---
-      # Передаем имя сервиса 'ollama' в контейнер backend
       - OLLAMA_HOST=ollama
-      - XDG_CACHE_HOME=/root/.cache/huggingface
     depends_on:
       - redis
       - ollama
     restart: unless-stopped
 
   frontend:
-    build: ./frontend # Контекст сборки - папка frontend
+    build: ./frontend
     container_name: transneft-frontend-nginx
     ports:
       - "80:80"
@@ -51,5 +48,5 @@ services:
 
 volumes:
   ollama_data:
-  redis_data: # Объявил том для Redis
-  models_cache: # Объявил том для кэша моделей
+  redis_data:
+  models_cache:
